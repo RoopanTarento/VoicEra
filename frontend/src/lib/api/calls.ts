@@ -30,11 +30,20 @@ export async function createWebCall(payload: WebCallRegisterRequest): Promise<We
 
 export async function listOrgCalls(
   orgId: string,
-  { limit = 50, offset = 0 }: { limit?: number; offset?: number } = {},
+  {
+    limit = 50,
+    offset = 0,
+    campaignId,
+    dateFrom,
+    dateTo,
+  }: { limit?: number; offset?: number; campaignId?: string; dateFrom?: string; dateTo?: string } = {},
 ): Promise<CallLogListResponse> {
-  return apiFetch<CallLogListResponse>(
-    `/calls/org/${encodeURIComponent(orgId)}?limit=${limit}&offset=${offset}`,
-  );
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  if (campaignId) params.set("campaign_id", campaignId);
+  // Local days (India time), both inclusive.
+  if (dateFrom) params.set("date_from", dateFrom);
+  if (dateTo) params.set("date_to", dateTo);
+  return apiFetch<CallLogListResponse>(`/calls/org/${encodeURIComponent(orgId)}?${params}`);
 }
 
 /** Pages through the whole org — for bulk exports, where "all calls"/"all
@@ -80,4 +89,9 @@ export async function getCallMetrics(callId: string): Promise<CallMetricsRespons
 /** All-time org call analytics — total calls, average duration, most-used agent. */
 export async function getOrgCallAnalytics(orgId: string): Promise<CallAnalyticsResponse> {
   return apiFetch<CallAnalyticsResponse>(`/calls/org/${encodeURIComponent(orgId)}/analytics`);
+}
+
+/** Run (or re-run) the analysis of a finished call from its transcript. */
+export async function analyzeCall(callId: string): Promise<CallLogItem> {
+  return apiFetch<CallLogItem>(`/calls/${encodeURIComponent(callId)}/analyze`, { method: "POST" });
 }

@@ -1,12 +1,19 @@
 import { jsPDF } from "jspdf";
+import { formatDuration } from "./format";
+import type { CallAnalyticsResponse, ModelUsageEntry } from "./api-types";
 
 export interface ReportMeta {
   orgName: string;
   email: string;
 }
 
+/** Quote one CSV cell. Text starting with =, +, -, @, tab or CR is prefixed
+ * with ' so spreadsheet apps don't evaluate it as a formula; plain numbers
+ * (including negatives) are left alone. */
 export function csvCell(v: unknown): string {
-  return `"${String(v ?? "").replace(/"/g, '""')}"`;
+  let text = String(v ?? "");
+  if (/^[=+\-@\t\r]/.test(text) && !/^[-+]?\d+(\.\d+)?$/.test(text)) text = `'${text}`;
+  return `"${text.replace(/"/g, '""')}"`;
 }
 
 function metaRow(label: string, value: string): string {
@@ -150,4 +157,77 @@ export function createPdfReport(title: string, meta: ReportMeta) {
       doc.save(filename);
     },
   };
+}
+
+export const MODEL_BAR_COLORS = ["#7b9aff", "#7df8c5", "#ffcf8d"];
+
+const PDF_ACCENT = "#2f6fed";
+const PDF_OK = "#22c55e";
+const PDF_DANGER = "#ef4444";
+
+export function modelUsageLine(entry: ModelUsageEntry | null | undefined): string {
+  if (!entry) return "—";
+  const name = [entry.provider, entry.model].filter(Boolean).join(" · ") || "—";
+  return `${name} (${entry.call_count.toLocaleString()} calls)`;
+}
+
+/** Builds an actual downloadable PDF from real analytics data, including real
+ * bar-chart graphs for Agent Performance, Model Usage, and Connection
+ * Breakdown, drawn as vector rectangles rather than rasterizing on-screen
+ * chart SVGs. Shared by the Analytics page and the Copilot's analytics card
+ * so a report generated either way is identical. */
+export function downloadAnalyticsPdf(data: CallAnalyticsResponse, meta: ReportMeta) {
+  const report = createPdfReport("Analytics Report", meta);
+
+  report.heading("Overview");
+  report.row("Connection rate", `${data.connection_rate}%`);
+  report.row("Calls attempted", data.calls_attempted.toLocaleString());
+  report.row("Calls connected", data.calls_connected.toLocaleString());
+  report.row("Calls failed", data.calls_failed.toLocaleString());
+  report.row("Avg call duration", formatDuration(data.average_duration_seconds));
+  report.row("Total minutes", Math.round(data.total_duration_seconds / 60).toLocaleString());
+  if (data.trend_vs_last_week_pct !== null && data.trend_vs_last_week_pct !== undefined) {
+    const trend = data.trend_vs_last_week_pct;
+    report.row("Trend vs last week", `${trend >= 0 ? "+" : ""}${trend}%`);
+  }
+
+  report.heading("Agent Performance");
+  if (data.agent_performance.length === 0) {
+    report.paragraph("No calls yet.");
+  } else {
+    const maxCount = Math.max(...data.agent_performance.map((a) => a.call_count), 1);
+    data.agent_performance.forEach((a, i) => {
+      report.barRow(
+        `${i + 1}. ${a.agent_name ?? "Unknown agent"}`,
+        `${a.call_count.toLocaleString()} calls`,
+        a.call_count / maxCount,
+        PDF_ACCENT,
+      );
+    });
+  }
+
+  if (data.model_usage) {
+    report.heading("Model Usage (by call volume)");
+    const modelRows: { label: string; entry: ModelUsageEntry | null; color: string }[] = [
+      { label: "STT", entry: data.model_usage.stt, color: MODEL_BAR_COLORS[0]! },
+      { label: "TTS", entry: data.model_usage.tts, color: MODEL_BAR_COLORS[1]! },
+      { label: "LLM", entry: data.model_usage.llm, color: MODEL_BAR_COLORS[2]! },
+    ];
+    const maxModelCount = Math.max(...modelRows.map((r) => r.entry?.call_count ?? 0), 1);
+    modelRows.forEach((r) => {
+      report.barRow(
+        `${r.label} — ${modelUsageLine(r.entry)}`,
+        "",
+        (r.entry?.call_count ?? 0) / maxModelCount,
+        r.color,
+      );
+    });
+  }
+
+  report.heading("Connection Breakdown");
+  const attempted = Math.max(1, data.calls_attempted);
+  report.barRow("Connected", data.calls_connected.toLocaleString(), data.calls_connected / attempted, PDF_OK);
+  report.barRow("Failed", data.calls_failed.toLocaleString(), data.calls_failed / attempted, PDF_DANGER);
+
+  report.save(`analytics-${new Date().toISOString().slice(0, 10)}.pdf`);
 }

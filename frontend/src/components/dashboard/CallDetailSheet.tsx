@@ -2,16 +2,20 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { Activity, ArrowLeft, Download, Pause, Play } from "lucide-react";
+import { ArrowLeft, Download, FlaskConical, Pause, Play, RefreshCw } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
+import { Button } from "@/components/ui/Button";
+import { CallOutcomeBadge } from "@/components/ui/CallOutcomeBadge";
 import { CallTypeBadge } from "@/components/ui/CallTypeBadge";
 import { Spinner } from "@/components/ui/Spinner";
 import { Sheet } from "@/components/ui/Sheet";
 import { Tooltip } from "@/components/ui/Tooltip";
-import { fetchCallRecordingBlob, fetchCallTranscriptText, getCallMetrics } from "@/lib/api/calls";
+import { usePermissions } from "@/components/PermissionsProvider";
+import { useUseCaseCatalogue } from "@/hooks/useUseCaseCatalogue";
+import { analyzeCall, fetchCallRecordingBlob, fetchCallTranscriptText, getCallMetrics } from "@/lib/api/calls";
 import { formatClockLabel, parseTranscript, type TranscriptLine } from "@/lib/transcript";
 import { displayFromNumber, displayToNumber, formatDuration } from "@/lib/format";
-import type { CallLogItem } from "@/lib/api-types";
+import type { CallAnalysis, CallLogItem, SchemeIntent } from "@/lib/api-types";
 
 function formatDateTime(iso?: string | null): string {
   if (!iso) return "–";
@@ -61,6 +65,159 @@ function TelemetryButtonIcon() {
         <polyline points="7 7 17 7 17 17" />
       </svg>
     </span>
+  );
+}
+
+const SENTIMENT_LABEL: Record<NonNullable<CallAnalysis["sentiment"]>, string> = {
+  positive: "Positive",
+  neutral: "Neutral",
+  negative: "Negative",
+};
+
+function SyntheticTranscriptLabel() {
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-v-sm border border-v-warn-tint bg-v-warn-tint px-2 py-[3px] text-[11px] font-medium text-v-warn-ink">
+      <FlaskConical className="size-3" strokeWidth={2} />
+      Synthetic test transcript (mock provider)
+    </span>
+  );
+}
+
+type SurveyAnswers = NonNullable<CallAnalysis["survey"]>;
+
+const INTENT_LABEL: Record<SchemeIntent, string> = {
+  awareness: "Awareness",
+  discovery: "Discovery",
+  enrolment: "Enrolment",
+  utilisation: "Utilisation",
+  support: "Support",
+  feedback: "Feedback",
+};
+
+function formatSurveyAnswer(value: number | boolean | string): string {
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  if (typeof value === "number") return `${value} / 5`;
+  return value;
+}
+
+/** Survey answers (city survey or scheme feedback), in the survey's own
+ * question order. Question text comes from the catalogue; an id it doesn't
+ * know is shown as-is. */
+function SurveyAnswersList({ survey }: { survey: SurveyAnswers }) {
+  const { catalogue } = useUseCaseCatalogue();
+  const def = [...(catalogue?.surveys ?? []), ...(catalogue?.feedback_surveys ?? [])].find(
+    (s) => s.id === survey.survey_id,
+  );
+  const order = def?.questions.map((q) => q.id) ?? [];
+  const rank = (id: string) => (order.includes(id) ? order.indexOf(id) : order.length);
+  const entries = Object.entries(survey.answers).sort(([a], [b]) => rank(a) - rank(b));
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <span className="font-mono text-[10px] uppercase tracking-[.12em] text-v-muted">
+        Survey answers · {survey.answered} of {survey.questions}
+      </span>
+      {entries.length === 0 ? (
+        <span className="text-[13px] text-v-muted">No questions answered.</span>
+      ) : (
+        <ul className="m-0 flex flex-col divide-y divide-v-hairline p-0">
+          {entries.map(([id, value]) => (
+            <li key={id} className="flex items-start justify-between gap-3 py-1.5 text-[13px] leading-snug">
+              <span className="min-w-0 flex-1 text-v-body">{def?.questions.find((q) => q.id === id)?.text ?? id}</span>
+              <span className="max-w-[45%] shrink-0 text-right font-medium text-v-fg">{formatSurveyAnswer(value)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {survey.themes.length > 0 ? (
+        <span className="text-xs text-v-muted">Complaints: {survey.themes.join(", ")}</span>
+      ) : null}
+    </div>
+  );
+}
+
+/** Outcome for everyone; sentiment, summary and agent feedback only reach
+ * roles with recordings:read (the API leaves them out for Viewers). */
+function AnalysisPanel({
+  analysis,
+  synthetic,
+  canAnalyse,
+  analysing,
+  analyseError,
+  onAnalyse,
+}: {
+  analysis: CallAnalysis | null | undefined;
+  synthetic: boolean;
+  canAnalyse: boolean;
+  analysing: boolean;
+  analyseError: string;
+  onAnalyse: () => void;
+}) {
+  return (
+    <div className="flex flex-col gap-3 rounded-v-md border border-v-line bg-white p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="flex flex-wrap items-center gap-2">
+          <span className="font-mono text-[10px] uppercase tracking-[.12em] text-v-muted">Outcome</span>
+          {analysis ? (
+            <CallOutcomeBadge analysis={analysis} />
+          ) : (
+            <span className="text-[13px] text-v-muted">Not analysed yet</span>
+          )}
+          {analysis?.sentiment ? (
+            <span className="text-xs text-v-muted">· Sentiment: {SENTIMENT_LABEL[analysis.sentiment]}</span>
+          ) : null}
+          {analysis?.switched_to ? (
+            <span className="text-xs text-v-muted">· Switched to the {INTENT_LABEL[analysis.switched_to]} path</span>
+          ) : null}
+        </span>
+        {canAnalyse ? (
+          <Button variant="ghost" size="sm" onClick={onAnalyse} disabled={analysing}>
+            {analysing ? <Spinner light={false} /> : <RefreshCw className="size-3.5" strokeWidth={1.9} />}
+            {analysis ? "Analyse again" : "Analyse"}
+          </Button>
+        ) : null}
+      </div>
+
+      {analysis?.summary ? <p className="m-0 text-[13px] leading-relaxed text-v-body">{analysis.summary}</p> : null}
+
+      {/* Only roles with recordings:read get `survey` and `issues` from the API. */}
+      {analysis?.survey ? <SurveyAnswersList survey={analysis.survey} /> : null}
+
+      {analysis?.issues && analysis.issues.length > 0 ? (
+        <div className="flex flex-col gap-1.5">
+          <span className="font-mono text-[10px] uppercase tracking-[.12em] text-v-muted">Problems mentioned</span>
+          <div className="flex flex-wrap gap-1.5">
+            {analysis.issues.map((issue) => (
+              <Badge key={issue} tone="warn">
+                {issue}
+              </Badge>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {analysis?.feedback && analysis.feedback.length > 0 ? (
+        <div className="flex flex-col gap-1.5">
+          <span className="font-mono text-[10px] uppercase tracking-[.12em] text-v-muted">Agent feedback</span>
+          <ul className="m-0 flex list-disc flex-col gap-1 pl-4.5 text-[13px] leading-snug text-v-body">
+            {analysis.feedback.map((f, i) => (
+              <li key={i}>{f}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      {analysis?.engine || synthetic ? (
+        <div className="flex flex-wrap items-center gap-2 border-t border-v-hairline pt-2.5 text-[11.5px] text-v-muted">
+          {analysis?.engine ? (
+            <span>{analysis.engine === "llm" ? "AI analysis" : "Basic analysis (built-in rules)"}</span>
+          ) : null}
+          {synthetic ? <SyntheticTranscriptLabel /> : null}
+        </div>
+      ) : null}
+
+      {analyseError ? <span className="text-[12.5px] text-v-danger">{analyseError}</span> : null}
+    </div>
   );
 }
 
@@ -236,17 +393,26 @@ function TranscriptBubble({
 }
 
 export function CallDetailSheet({
-  call,
+  call: initialCall,
   onClose,
+  onCallUpdated,
   showTelemetryLink = true,
 }: {
   call: CallLogItem;
   onClose: () => void;
+  /** Called with the refreshed call after "Analyse again", so lists can update. */
+  onCallUpdated?: (call: CallLogItem) => void;
   /** Hide the "View Call Telemetry" link when the sheet is already opened
    * from the Telemetry page itself — linking back to where you already are. */
   showTelemetryLink?: boolean;
 }) {
-  const [tab, setTab] = useState<"transcript" | "details">("transcript");
+  const { can } = usePermissions();
+  // Recordings, transcripts and the full analysis: Super admin, Admin, Campaign manager.
+  const canListen = can("recordings:read");
+  const [call, setCall] = useState(initialCall);
+  const [analysing, setAnalysing] = useState(false);
+  const [analyseError, setAnalyseError] = useState("");
+  const [tab, setTab] = useState<"transcript" | "details">(canListen ? "transcript" : "details");
   const [transcript, setTranscript] = useState<TranscriptLine[] | null>(null);
   const [transcriptError, setTranscriptError] = useState("");
   const [transcriptRaw, setTranscriptRaw] = useState("");
@@ -277,6 +443,7 @@ export function CallDetailSheet({
   }, [call.call_id]);
 
   useEffect(() => {
+    if (!canListen) return;
     let cancelled = false;
     let objectUrl: string | null = null;
     fetchCallRecordingBlob(call.call_id)
@@ -300,9 +467,10 @@ export function CallDetailSheet({
       cancelled = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [call.call_id]);
+  }, [call.call_id, canListen]);
 
   useEffect(() => {
+    if (!canListen) return;
     let cancelled = false;
     setTranscript(null);
     setTranscriptError("");
@@ -318,7 +486,25 @@ export function CallDetailSheet({
     return () => {
       cancelled = true;
     };
-  }, [call.call_id]);
+  }, [call.call_id, canListen]);
+
+  async function analyse() {
+    setAnalysing(true);
+    setAnalyseError("");
+    try {
+      const updated = await analyzeCall(call.call_id);
+      setCall(updated);
+      onCallUpdated?.(updated);
+    } catch (err) {
+      setAnalyseError(err instanceof Error ? err.message : "Couldn't analyse this call.");
+    } finally {
+      setAnalysing(false);
+    }
+  }
+
+  // Until access loads every permission reads as granted; fall back cleanly.
+  const shownTab = canListen ? tab : "details";
+  const synthetic = (call.transcript_source ?? call.analysis?.transcript_source) === "synthetic_mock";
 
   function togglePlay() {
     const el = audioElRef.current;
@@ -394,7 +580,7 @@ export function CallDetailSheet({
             </span>
           </span>
         </span>
-        {showTelemetryLink ? (
+        {showTelemetryLink && can("telemetry:read") ? (
           hasLatencyData ? (
             <Link
               href={`/telemetry?call=${encodeURIComponent(call.call_id)}`}
@@ -418,8 +604,10 @@ export function CallDetailSheet({
       </div>
 
       <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-5">
-        <WaveformPlayer state={audio} onTogglePlay={togglePlay} onSeek={seekTo} callId={call.call_id} />
-        {audio.url ? (
+        {canListen ? (
+          <WaveformPlayer state={audio} onTogglePlay={togglePlay} onSeek={seekTo} callId={call.call_id} />
+        ) : null}
+        {canListen && audio.url ? (
           <audio
             ref={audioElRef}
             src={audio.url}
@@ -444,22 +632,31 @@ export function CallDetailSheet({
           <Badge tone={statusTone(call)}>{call.status}</Badge>
         </div>
 
+        <AnalysisPanel
+          analysis={call.analysis}
+          synthetic={synthetic}
+          canAnalyse={canListen}
+          analysing={analysing}
+          analyseError={analyseError}
+          onAnalyse={() => void analyse()}
+        />
+
         <div className="flex items-center justify-between border-b border-v-line">
           <div className="flex gap-4">
-            {(["transcript", "details"] as const).map((t) => (
+            {(canListen ? (["transcript", "details"] as const) : (["details"] as const)).map((t) => (
               <button
                 key={t}
                 type="button"
                 onClick={() => setTab(t)}
                 className={`cursor-pointer border-b-2 px-1 pb-2.5 text-[13.5px] font-medium capitalize transition-colors ${
-                  tab === t ? "border-v-fg text-v-fg" : "border-transparent text-v-muted hover:text-v-fg"
+                  shownTab === t ? "border-v-fg text-v-fg" : "border-transparent text-v-muted hover:text-v-fg"
                 }`}
               >
                 {t}
               </button>
             ))}
           </div>
-          {tab === "transcript" && transcript && transcript.length > 0 ? (
+          {shownTab === "transcript" && transcript && transcript.length > 0 ? (
             <button
               type="button"
               onClick={downloadTranscript}
@@ -471,7 +668,13 @@ export function CallDetailSheet({
           ) : null}
         </div>
 
-        {tab === "transcript" ? (
+        {shownTab === "transcript" && synthetic && transcript && transcript.length > 0 ? (
+          <div>
+            <SyntheticTranscriptLabel />
+          </div>
+        ) : null}
+
+        {shownTab === "transcript" ? (
           transcriptError ? (
             <p className="py-8 text-center text-sm text-v-muted">{transcriptError}</p>
           ) : transcript === null ? (

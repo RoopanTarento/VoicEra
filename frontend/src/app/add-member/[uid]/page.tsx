@@ -9,11 +9,13 @@ function AddMemberRedirect() {
   const searchParams = useSearchParams();
 
   useEffect(() => {
+    // An invitation token carries over; a bare org link lands on the signup
+    // page's "joining needs an invitation" notice.
     const params = new URLSearchParams();
+    const invite = searchParams.get("invite");
     const org = searchParams.get("org");
-    const orgName = searchParams.get("org_name");
-    if (org) params.set("org", org);
-    if (orgName) params.set("org_name", orgName);
+    if (invite) params.set("invite", invite);
+    else if (org) params.set("org", org);
     const qs = params.toString();
     router.replace(qs ? `/signup?${qs}` : "/signup");
   }, [router, searchParams]);
@@ -25,7 +27,7 @@ function AddMemberRedirect() {
   );
 }
 
-/** Legacy invite links redirect to the two-step signup flow with org prefilled. */
+/** Legacy invite links redirect to the signup page. */
 export default function AddMemberPage() {
   return (
     <Suspense

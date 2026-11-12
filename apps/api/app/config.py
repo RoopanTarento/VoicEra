@@ -53,6 +53,65 @@ class Settings(BaseSettings):
         description="Fernet key for encrypting ProviderAuth credential blobs",
     )
 
+    # --- VoicEra Secure (contact vault) -----------------------------------
+    SECURE_VAULT_KEYS: str = Field(
+        default="",
+        description=(
+            "Comma-separated versioned AES-256 keys for the contact vault, "
+            "'v1:<urlsafe-base64 32 bytes>,v2:<...>'. Required for any vault "
+            "operation; there is no fallback cipher."
+        ),
+    )
+    SECURE_VAULT_ACTIVE_KEY_VERSION: str = Field(
+        default="",
+        description="Key version used for new encryptions (must exist in SECURE_VAULT_KEYS)",
+    )
+    SECURE_VAULT_INDEX_KEY: str = Field(
+        default="",
+        description=(
+            "Separate urlsafe-base64 32-byte HMAC key for the duplicate-detection "
+            "blind index. Must differ from every data key."
+        ),
+    )
+    SECURE_SERVICE_CREDENTIALS: str = Field(
+        default="",
+        description=(
+            "Service identities allowed to call the resolve API, comma-separated "
+            "'service_id|scope+scope|secret'. Separate from INTERNAL_API_KEY."
+        ),
+    )
+    SECURE_DEFAULT_REGION: str = Field(
+        default="IN",
+        description="Region used to parse contact numbers written without a '+' prefix",
+    )
+    SECURE_RESOLVE_RATE_LIMIT_PER_MINUTE: int = Field(
+        default=600,
+        description="Max contact resolutions per service identity per organisation per minute",
+    )
+    SECURE_DENIAL_ALERT_THRESHOLD: int = Field(
+        default=5,
+        description="Denied resolutions by one actor within 5 minutes that raise a suspicious_access event",
+    )
+    SECURE_CONTACT_RETENTION_DAYS: int = Field(
+        default=365,
+        description="Days a deleted-or-inactive vault record keeps its ciphertext before purge",
+    )
+    SECURE_ENFORCE_VAULT_CAMPAIGNS: bool = Field(
+        default=False,
+        description="When true, new campaigns must use source_type='secure_contacts'",
+    )
+    PLATFORM_ADMIN_EMAILS: str = Field(
+        default="",
+        description=(
+            "Comma-separated emails of VoicEra platform admins (manage adopters; no "
+            "access to an adopter's data unless also a member of it)"
+        ),
+    )
+    TELEPHONY_MOCK_ENABLED: bool = Field(
+        default=False,
+        description="Register the mock telephony provider (local demos and tests only)",
+    )
+
     CHROMA_BASE_DIR: str = Field(
         default="app/rag/chroma_data",
         description="Root directory for per-org Chroma knowledge stores",
@@ -102,7 +161,61 @@ class Settings(BaseSettings):
         description="When true, API startup can spawn orchestrator (docker uses separate service)",
     )
 
-    @field_validator("DEBUG", mode="before")
+    COPILOT_LLM_PROVIDER: str = Field(
+        default="openai",
+        description=(
+            "Provider id used for Copilot chat completions. Supported today: "
+            "'openai', 'groq' (free tier), 'openrouter' — all OpenAI-compatible "
+            "chat-completions APIs. See apps/api/app/services/copilot/engine.py."
+        ),
+    )
+    COPILOT_LLM_MODEL: str = Field(
+        default="",
+        description=(
+            "Chat-completions model used by the Copilot. Leave unset to use "
+            "COPILOT_LLM_PROVIDER's own default model from the provider registry "
+            "(apps/providers/cloud/<provider>/catalog.py)."
+        ),
+    )
+    COPILOT_LLM_API_KEY: str = Field(
+        default="",
+        description=(
+            "Fallback API key for COPILOT_LLM_PROVIDER when the organisation has no "
+            "stored ProviderAuth credential for it. For provider='openai' only, also "
+            "falls back to KB_EMBEDDING_API_KEY if unset (both are OpenAI keys in a "
+            "typical local setup)."
+        ),
+    )
+    COPILOT_MAX_TOOL_ITERATIONS: int = Field(
+        default=4,
+        description="Max sequential tool-call rounds per Copilot turn, to bound runaway loops",
+    )
+    COPILOT_MAX_OUTPUT_TOKENS: int = Field(
+        default=512,
+        description=(
+            "max_tokens passed to every Copilot chat-completions call, bounding "
+            "worst-case generation length and cost. Lowered from 1024: on a "
+            "provider with a tight TPM cap (this account's real Groq limit is "
+            "8000/min, confirmed via its own rate-limit headers), max_tokens is "
+            "reserved against that budget whether or not the response uses it "
+            "all, so every unclaimed token here is real headroom lost on every "
+            "single call. Every real response observed in this chat panel "
+            "(compact by design — see the system prompt's formatting guidance) "
+            "comfortably fits well under 512. Most of a turn's cost is still "
+            "the system prompt + tool schemas (input, not output) — see "
+            "SYSTEM_PROMPT_TEMPLATE / TOOL_SPECS for that side of the budget."
+        ),
+    )
+    COPILOT_HISTORY_MESSAGES: int = Field(
+        default=16,
+        description="Max prior messages (from the stored conversation) replayed as context",
+    )
+    COPILOT_ATTACHMENT_MAX_BYTES: int = Field(
+        default=8 * 1024 * 1024,
+        description="Maximum image size a user can attach to a Copilot message",
+    )
+
+    @field_validator("DEBUG", "SECURE_ENFORCE_VAULT_CAMPAIGNS", "TELEPHONY_MOCK_ENABLED", mode="before")
     @classmethod
     def coerce_debug(cls, value: Any) -> bool:
         """Accept common truthy strings; treat anything else as False.
@@ -122,11 +235,17 @@ class Settings(BaseSettings):
 
     @property
     def mongodb_uri(self) -> str:
-        """Build Mongo-compatible connection URI (FerretDB or MongoDB)."""
-        uri = (
-            f"mongodb://{self.MONGODB_USER}:{self.MONGODB_PASSWORD}"
-            f"@{self.MONGODB_HOST}:{self.MONGODB_PORT}/{self.MONGODB_DATABASE}"
-        )
+        """Build Mongo-compatible connection URI (FerretDB or MongoDB).
+
+        Omits the "{user}:{pass}@" segment entirely when both are blank —
+        a no-auth local mongod (a common bare-metal local-dev setup) has no
+        such user, and newer pymongo versions reject an empty-string
+        username outright ("The empty string is not valid username") rather
+        than treating it as anonymous, so a literal empty segment is a hard
+        connection failure, not just an ignored no-op.
+        """
+        auth = f"{self.MONGODB_USER}:{self.MONGODB_PASSWORD}@" if self.MONGODB_USER or self.MONGODB_PASSWORD else ""
+        uri = f"mongodb://{auth}{self.MONGODB_HOST}:{self.MONGODB_PORT}/{self.MONGODB_DATABASE}"
         params: list[str] = []
         if self.MONGODB_AUTH_SOURCE:
             params.append(f"authSource={self.MONGODB_AUTH_SOURCE}")

@@ -1,18 +1,61 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Search, Upload } from "lucide-react";
+import { BookOpen, Search, Upload } from "lucide-react";
+import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Select } from "@/components/ui/Select";
 import { Spinner } from "@/components/ui/Spinner";
 import { UploadDocumentDialog } from "@/components/knowledge/UploadDocumentDialog";
 import { FileCardGrid, type KnowledgeFile } from "@/components/knowledge/FileCard";
 import { PdfPreviewSheet } from "@/components/knowledge/PdfPreviewSheet";
+import { usePermissions } from "@/components/PermissionsProvider";
 import { useKnowledgeBase } from "@/hooks/useKnowledgeBase";
+import { useUseCaseCatalogue } from "@/hooks/useUseCaseCatalogue";
 import { listAgents } from "@/lib/api-client";
 import { previewKnowledgeDocument } from "@/lib/api/knowledge";
+import { fetchKnowledgePack, type Scheme } from "@/lib/api/use-cases";
 import { formatDateTime } from "@/lib/format";
 import type { AgentApiResponse, KnowledgeDocumentItem } from "@/lib/api-types";
+
+/** Scheme knowledge packs that ship with VoicEra: written into scheme agents'
+ * prompts, so there's nothing to upload, index or attach. */
+function BuiltInPacks({ schemes, query, onView }: { schemes: Scheme[]; query: string; onView: (s: Scheme) => void }) {
+  const q = query.trim().toLowerCase();
+  const shown = schemes.filter((s) => !q || s.pack_name.toLowerCase().includes(q) || s.category.toLowerCase().includes(q));
+  if (shown.length === 0) return null;
+  return (
+    <section className="flex flex-col gap-3" aria-label="Built-in scheme knowledge packs">
+      <div className="flex flex-col gap-1">
+        <span className="flex items-center gap-2 text-[15px] font-semibold tracking-tight">
+          <BookOpen className="size-4 text-v-accent" strokeWidth={1.8} />
+          Scheme knowledge packs
+          <Badge tone="live">Built in</Badge>
+        </span>
+        <span className="max-w-[70ch] text-[13px] font-light leading-relaxed text-v-muted">
+          One pack per scheme, covering all six scheme agents. Scheme agents get their packs automatically when the
+          agent is written, so there&apos;s nothing to upload or attach.
+        </span>
+      </div>
+      <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
+        {shown.map((s) => (
+          <button
+            key={s.id}
+            type="button"
+            onClick={() => onView(s)}
+            className="flex cursor-pointer flex-col gap-1 rounded-v-md border border-v-line bg-white p-3.5 text-left transition-colors hover:border-v-accent"
+          >
+            <span className="text-[13px] font-medium leading-snug">{s.pack_name.replace(/^Knowledge pack - |\.pdf$/g, "")}</span>
+            <span className="text-xs font-light text-v-muted">
+              {s.category}
+              {s.custom ? " · your scheme" : ` · facts checked ${s.last_checked}`}
+            </span>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
 
 function toKnowledgeFile(doc: KnowledgeDocumentItem): KnowledgeFile {
   return {
@@ -26,6 +69,9 @@ function toKnowledgeFile(doc: KnowledgeDocumentItem): KnowledgeFile {
 
 export function KnowledgeBase({ onNotify }: { onNotify: (title: string, note: string) => void }) {
   const { documents, loading, loadError, uploading, upload, remove } = useKnowledgeBase(onNotify);
+  const { catalogue } = useUseCaseCatalogue();
+  // Uploading and deleting documents: Super admin and Admin.
+  const canWrite = usePermissions().can("knowledge:write");
   const [query, setQuery] = useState("");
   const [uploadOpen, setUploadOpen] = useState(false);
   const [previewFile, setPreviewFile] = useState<KnowledgeFile | null>(null);
@@ -80,6 +126,14 @@ export function KnowledgeBase({ onNotify }: { onNotify: (title: string, note: st
     [documents],
   );
 
+  async function viewPack(scheme: Scheme) {
+    try {
+      setPreviewFile({ id: scheme.id, name: scheme.pack_name, status: "ready", passages: 0, addedAt: "", blob: await fetchKnowledgePack(scheme.id) });
+    } catch (err) {
+      onNotify("Couldn't open the pack", err instanceof Error ? err.message : "Something went wrong.");
+    }
+  }
+
   async function handlePreview(file: KnowledgeFile) {
     try {
       const blob = await previewKnowledgeDocument(file.id);
@@ -95,13 +149,16 @@ export function KnowledgeBase({ onNotify }: { onNotify: (title: string, note: st
         <div className="flex flex-col gap-1.5">
           <h1 className="text-3xl font-semibold tracking-tight">Knowledge Base</h1>
           <p className="max-w-[62ch] text-sm font-light leading-relaxed text-v-muted">
-            Documents here are searched at call time, so agents quote them instead of guessing.
+            Documents here are searched at call time, so agents quote them instead of guessing. Scheme knowledge
+            packs are built in, below.
           </p>
         </div>
-        <Button onClick={() => setUploadOpen(true)}>
-          <Upload className="size-4" strokeWidth={1.75} />
-          Upload document
-        </Button>
+        {canWrite ? (
+          <Button onClick={() => setUploadOpen(true)}>
+            <Upload className="size-4" strokeWidth={1.75} />
+            Upload document
+          </Button>
+        ) : null}
       </div>
 
       {loadError ? (
@@ -155,21 +212,35 @@ export function KnowledgeBase({ onNotify }: { onNotify: (title: string, note: st
             {query || agentFilterId ? "Nothing matches" : "No documents yet"}
           </span>
           <span className="text-xs font-light text-v-muted">
-            {query || agentFilterId ? "Try another search or agent." : "Upload a PDF to start grounding your agents."}
+            {query || agentFilterId
+              ? "Try another search or agent."
+              : canWrite
+                ? "Upload a PDF to start grounding your agents."
+                : "Documents your Super admin or an Admin uploads will show up here."}
           </span>
         </div>
       ) : (
         <FileCardGrid
           files={files}
           onPreview={handlePreview}
-          onDelete={(file) => {
-            const doc = documentsById[file.id];
-            if (doc) remove(doc);
-          }}
+          onDelete={
+            canWrite
+              ? (file) => {
+                  const doc = documentsById[file.id];
+                  if (doc) remove(doc);
+                }
+              : undefined
+          }
         />
       )}
 
-      <UploadDocumentDialog open={uploadOpen} uploading={uploading} onUpload={upload} onClose={() => setUploadOpen(false)} />
+      {catalogue && !agentFilterId ? (
+        <div className="border-t border-v-line pt-6">
+          <BuiltInPacks schemes={catalogue.schemes} query={query} onView={(s) => void viewPack(s)} />
+        </div>
+      ) : null}
+
+      <UploadDocumentDialog open={uploadOpen && canWrite} uploading={uploading} onUpload={upload} onClose={() => setUploadOpen(false)} />
 
       <PdfPreviewSheet file={previewFile} onClose={() => setPreviewFile(null)} />
     </div>

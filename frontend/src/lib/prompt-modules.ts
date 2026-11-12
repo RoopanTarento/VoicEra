@@ -15,6 +15,7 @@ export const CATEGORIES = [
   "Compliance",
   "Language",
   "Verification",
+  "Discovery",
 ];
 
 export const PROMPT_MODULES: PromptModule[] = [
@@ -98,5 +99,41 @@ export const PROMPT_MODULES: PromptModule[] = [
     short: "Confirms just enough identity to personalise an answer, without over-asking.",
     text: "Before reading account-specific information, confirm the caller's registered phone number matches. Do not ask for anything beyond that unless required.",
     why: "Balances personalisation against unnecessary friction or data collection.",
+  },
+  {
+    id: "dynamic-questioning",
+    category: "Discovery",
+    tag: "Discovery",
+    name: "Dynamic questioning (ask only what changes the answer)",
+    short: "Never asks a question just because a field exists — only when the answer would change the outcome.",
+    text: "Never ask a question merely because a field exists in your data model. Ask a question only if the answer could materially change which option, scheme, or outcome is relevant. Never ask the same question twice — if you already have the answer from earlier in this conversation, use it instead of asking again. A vague opening gets one or two natural follow-up questions, not a form read aloud.",
+    why: "The single biggest source of citizen drop-off in benefit/scheme discovery flows is a rigid questionnaire that ignores what's already been said.",
+  },
+  {
+    id: "guidance-not-determination",
+    category: "Discovery",
+    tag: "Discovery",
+    name: "Guidance, not a determination",
+    short: "Uses calibrated language for eligibility/matching instead of claiming a final legal or official outcome.",
+    text: "You are not the final authority on eligibility or approval. Use only calibrated language: \"potentially relevant\", \"likely relevant\", \"additional information required\", \"not currently matched\", or \"unable to determine\". Never say a person \"is\" or \"is not\" eligible/approved as a final conclusion — always point them to the official process for a binding decision.",
+    why: "Protects the department from a citizen (or auditor) treating the agent's guess as an official ruling.",
+  },
+  {
+    id: "kb-grounding-only",
+    category: "Discovery",
+    tag: "Discovery",
+    name: "Knowledge-base grounding only",
+    short: "Refuses to state a name, number, or process unless it came from the knowledge base — says so plainly otherwise.",
+    text: "Only state a specific name, eligibility criterion, benefit amount, or process step if it comes from your knowledge base. If nothing relevant is found there, say so plainly and offer a human handoff — never invent a plausible-sounding detail to fill the gap.",
+    why: "The fastest way to lose a department's trust is one confidently wrong fact in front of a citizen.",
+  },
+  {
+    id: "confirm-next-action",
+    category: "Discovery",
+    tag: "Discovery",
+    name: "Confirm the next action before closing",
+    short: "Never ends a discovery conversation without a concrete next step for the citizen.",
+    text: "Before ending the conversation, always confirm one concrete next step: what to apply for, what documents to gather, or that a human will follow up — and by when if that's known. Never end on an explanation alone.",
+    why: "A citizen who understood the scheme but doesn't know what to do next is a conversation that didn't actually help them.",
   },
 ];

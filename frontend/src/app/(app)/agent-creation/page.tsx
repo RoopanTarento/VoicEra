@@ -5,6 +5,9 @@ import { useRouter } from "next/navigation";
 import { CheckCircle2, Clock, MessageSquare, Phone, Settings, User } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { StartStep } from "@/components/wizard/StartStep";
+import { QuickAgentFlow } from "@/components/wizard/QuickAgentFlow";
+import { Spinner } from "@/components/ui/Spinner";
+import { listAgents } from "@/lib/api-client";
 import { AgentBasicsStep } from "@/components/wizard/AgentBasicsStep";
 import { LanguageProvidersStep } from "@/components/wizard/LanguageProvidersStep";
 import { DeliveryStep } from "@/components/wizard/DeliveryStep";
@@ -13,19 +16,16 @@ import { ReviewStep } from "@/components/wizard/ReviewStep";
 import { PromptLibraryDialog } from "@/components/wizard/PromptLibraryDialog";
 import { SectionNav, type SectionNavItem } from "@/components/wizard/SectionNav";
 import { useToast } from "@/components/ui/useToast";
-import { AgentForm, AgentTemplate, DEFAULT_FORM } from "@/lib/wizard-data";
+import { RequirePermission } from "@/components/PermissionsProvider";
+import { AgentForm, DEFAULT_FORM } from "@/lib/wizard-data";
+import type { AgentUseCase } from "@/lib/api-types";
 import { PromptModule } from "@/lib/prompt-modules";
 import { useSyncCustomVariables } from "@/lib/use-sync-custom-variables";
-import {
-  defaultModelFromSettings,
-  modelOptionsFromSettings,
-  pickFirstProvider,
-  useWizardCatalogs,
-  voiceOptionsFromSettings,
-} from "@/lib/use-wizard-catalogs";
+import { useWizardCatalogs } from "@/lib/use-wizard-catalogs";
+import { useWizardDefaults } from "@/lib/use-wizard-defaults";
 
 const STEPS: SectionNavItem[] = [
-  { id: "start", title: "Setup", subtitle: "Start from scratch", icon: MessageSquare },
+  { id: "start", title: "Setup", subtitle: "Pick a use case", icon: MessageSquare },
   { id: "agent", title: "Agent", subtitle: "Name, greeting & prompt", icon: User },
   { id: "language", title: "Engine", subtitle: "STT · LLM · TTS", icon: Settings },
   { id: "delivery", title: "Delivery", subtitle: "Select provider", icon: Phone },
@@ -40,11 +40,55 @@ const NEXT_LABEL: Record<string, string> = {
   "call-details": "Next — review",
 };
 
-function providerStillValid(list: Record<string, unknown>, id: string): boolean {
-  return Boolean(id && id in list);
+export default function AgentCreationPage() {
+  return (
+    <RequirePermission permission="agents:write" what="create agents">
+      <FlowChooser />
+    </RequirePermission>
+  );
 }
 
-export default function AgentCreationPage() {
+/** An organisation's first agent gets the short guided flow (department →
+ * schemes → agent → language); from the second agent on, or with ?full=1,
+ * it's the full wizard. */
+function FlowChooser() {
+  const [flow, setFlow] = useState<"checking" | "quick" | "full">("checking");
+  const { notify, toastNode } = useToast();
+
+  useEffect(() => {
+    let cancelled = false;
+    const wantsFull = new URLSearchParams(window.location.search).get("full") === "1";
+    (wantsFull ? Promise.resolve(null) : listAgents())
+      .then((agents) => {
+        if (!cancelled) setFlow(agents && agents.length === 0 ? "quick" : "full");
+      })
+      .catch(() => {
+        if (!cancelled) setFlow("full");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (flow === "checking") {
+    return (
+      <div className="flex min-h-[40vh] items-center justify-center gap-2 text-sm text-v-muted">
+        <Spinner light={false} /> Getting ready…
+      </div>
+    );
+  }
+  if (flow === "quick") {
+    return (
+      <>
+        <QuickAgentFlow onNotify={notify} />
+        {toastNode}
+      </>
+    );
+  }
+  return <AgentCreation />;
+}
+
+function AgentCreation() {
   const router = useRouter();
   const [step, setStep] = useState(0);
   // Furthest step ever reached — going back to re-check an earlier step
@@ -73,88 +117,19 @@ export default function AgentCreationPage() {
 
   useSyncCustomVariables(form, onChange);
 
-  // Pick a first provider whenever one is missing (fresh form, or a template
-  // that only sets languages) or the current pick no longer matches the
-  // language-filtered catalog — not just on "became invalid", which used to
-  // skip straight past an empty provider forever.
-  useEffect(() => {
-    if (catalogs.loading || form.langs.length === 0) return;
-    setForm((f) => {
-      let next = { ...f };
-      if (!providerStillValid(catalogs.sttProviders, f.sttProvider)) {
-        next = { ...next, sttProvider: pickFirstProvider(catalogs.sttProviders) };
-      }
-      if (!providerStillValid(catalogs.ttsProviders, f.ttsProvider)) {
-        next = { ...next, ttsProvider: pickFirstProvider(catalogs.ttsProviders) };
-      }
-      if (!providerStillValid(catalogs.llmProviders, f.llmProvider)) {
-        next = { ...next, llmProvider: pickFirstProvider(catalogs.llmProviders) };
-      }
-      return next;
-    });
-  }, [
-    catalogs.loading,
-    catalogs.sttProviders,
-    catalogs.ttsProviders,
-    catalogs.llmProviders,
-    form.langs,
-  ]);
-
-  useEffect(() => {
-    if (catalogs.llmSettings) {
-      const model = defaultModelFromSettings(catalogs.llmSettings);
-      const models = modelOptionsFromSettings(catalogs.llmSettings);
-      if (model && !form.llmModel) onChange("llmModel", model);
-      else if (form.llmModel && !models.some((m) => m.value === form.llmModel) && models[0]) {
-        onChange("llmModel", models[0].value);
-      }
-    }
-  }, [catalogs.llmSettings, form.llmModel]);
-
-  useEffect(() => {
-    if (catalogs.ttsSettings) {
-      // Voice options are per (model, language) via `capabilities` — omitting
-      // these resolved against the wrong (arbitrary first) language, so a
-      // validly-picked voice for the real language kept getting judged "not
-      // in the list" and silently reset on every render.
-      const voices = voiceOptionsFromSettings(catalogs.ttsSettings, form.ttsModel, form.langs[0]);
-      if (voices.length && !form.voice) onChange("voice", voices[0]!.id);
-      else if (form.voice && !voices.some((v) => v.id === form.voice) && voices[0]) {
-        onChange("voice", voices[0].id);
-      }
-    }
-  }, [catalogs.ttsSettings, form.voice, form.ttsModel, form.langs]);
-
-  useEffect(() => {
-    if (catalogs.sttSettings) {
-      const model = defaultModelFromSettings(catalogs.sttSettings);
-      const models = modelOptionsFromSettings(catalogs.sttSettings);
-      if (model && !form.sttModel) onChange("sttModel", model);
-      else if (form.sttModel && !models.some((m) => m.value === form.sttModel) && models[0]) {
-        onChange("sttModel", models[0].value);
-      }
-    }
-  }, [catalogs.sttSettings, form.sttModel]);
-
-  useEffect(() => {
-    if (catalogs.ttsSettings) {
-      const model = defaultModelFromSettings(catalogs.ttsSettings);
-      const models = modelOptionsFromSettings(catalogs.ttsSettings);
-      if (model && !form.ttsModel) onChange("ttsModel", model);
-      else if (form.ttsModel && !models.some((m) => m.value === form.ttsModel) && models[0]) {
-        onChange("ttsModel", models[0].value);
-      }
-    }
-  }, [catalogs.ttsSettings, form.ttsModel]);
+  useWizardDefaults(form, setForm, catalogs);
 
   const jumpTo = (id: string) => {
     const idx = STEPS.findIndex((s) => s.id === id);
     if (idx >= 0) setStep(idx);
   };
 
-  const useTemplate = (t: AgentTemplate) => {
-    setForm((f) => ({ ...f, ...t.set }));
-    jumpTo("review");
+  // The Agent step's use-case row opens pre-set to this (a scheme intent or
+  // the city survey), so the user only picks the schemes or survey and asks
+  // for the agent to be written.
+  const pickUseCase = (useCase: AgentUseCase) => {
+    setForm((f) => ({ ...f, useCase }));
+    jumpTo("agent");
   };
 
   const insertModule = (m: PromptModule) => {
@@ -213,7 +188,7 @@ export default function AgentCreationPage() {
           ) : null}
 
           {currentId === "start" ? (
-            <StartStep onStartScratch={() => setStep(1)} onUseTemplate={useTemplate} />
+            <StartStep onStartScratch={() => setStep(1)} onPickUseCase={pickUseCase} />
           ) : null}
 
           {catalogs.loading && currentId !== "start" ? (

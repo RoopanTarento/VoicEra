@@ -28,6 +28,8 @@ async def run_pipeline(
     custom_variables: dict[str, Any] | None = None,
     session_label: str = "session",
     finalize_call: bool = False,
+    extra_tools: list[Any] | None = None,
+    aggregator_hooks: Any = None,
 ) -> None:
     """Shared Pipecat pipeline for telephony and browser WebSocket agents."""
     stt, tts, llm = await build_ai_services(agent)
@@ -58,6 +60,8 @@ async def run_pipeline(
         agent=agent,
         org_id=org_id,
         behaviour=behaviour,
+        extra_tools=extra_tools,
+        aggregator_hooks=aggregator_hooks,
     )
 
     if call_id:

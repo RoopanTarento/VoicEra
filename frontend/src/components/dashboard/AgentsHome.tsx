@@ -22,6 +22,7 @@ import {
   Trash2,
   User,
 } from "lucide-react";
+import { FirstAgentWelcome } from "@/components/dashboard/FirstAgentWelcome";
 import { Button, IconButton } from "@/components/ui/Button";
 import { Dialog, DialogHeader } from "@/components/ui/Dialog";
 import { Select } from "@/components/ui/Select";
@@ -32,6 +33,7 @@ import { listPhoneNumbers } from "@/lib/api/phone-numbers";
 import { formatDuration, nameFromEmail, truncateLabel } from "@/lib/format";
 import { agentPurposeFromApi } from "@/lib/agent-mapper";
 import { useAuth } from "@/components/AuthProvider";
+import { usePermissions } from "@/components/PermissionsProvider";
 import { AgentTestModal } from "@/components/dashboard/AgentTestModal";
 import { TestCallSheet } from "@/components/dashboard/TestCallSheet";
 import type { AgentApiResponse, CallLogItem, PhoneNumberItem } from "@/lib/api-types";
@@ -244,14 +246,28 @@ interface AgentCardActions {
   onArchive: () => void;
 }
 
-function cardMenuActions(a: AgentCardActions, archived: boolean): MenuAction[] {
+/** What the signed-in role may do with an agent (the API enforces the same). */
+interface AgentCardAccess {
+  canWrite: boolean;
+  canDelete: boolean;
+  /** Browser test call to the agent (calls:test). */
+  canTestBrowser: boolean;
+  /** Ring a typed phone number from the agent (calls:dial). */
+  canDial: boolean;
+}
+
+function cardMenuActions(a: AgentCardActions, archived: boolean, access: AgentCardAccess): MenuAction[] {
   return [
     { label: "History", icon: Clock, onClick: a.onOpenLogs },
-    { label: "Duplicate", icon: Copy, onClick: a.onDuplicate },
-    { label: "Delete", icon: Trash2, onClick: a.onDelete, danger: true },
-    archived
-      ? { label: "Unarchive", icon: ArchiveRestore, onClick: a.onArchive }
-      : { label: "Archive", icon: Archive, onClick: a.onArchive },
+    ...(access.canWrite ? [{ label: "Duplicate", icon: Copy, onClick: a.onDuplicate }] : []),
+    ...(access.canDelete ? [{ label: "Delete", icon: Trash2, onClick: a.onDelete, danger: true }] : []),
+    ...(access.canWrite
+      ? [
+          archived
+            ? { label: "Unarchive", icon: ArchiveRestore, onClick: a.onArchive }
+            : { label: "Archive", icon: Archive, onClick: a.onArchive },
+        ]
+      : []),
   ];
 }
 
@@ -262,6 +278,7 @@ interface AgentCardProps extends AgentCardActions {
   busy: boolean;
   index: number;
   attachedByEmail?: string | null;
+  access: AgentCardAccess;
 }
 
 /** Grid card: channel icon, identity, link status, and test actions. */
@@ -271,6 +288,7 @@ function AgentCard({
   busy,
   index,
   attachedByEmail,
+  access,
   onOpenEdit,
   onTestCall,
   onTestBrowser,
@@ -281,6 +299,7 @@ function AgentCard({
 }: AgentCardProps) {
   const isTelephony = raw?.agent_category === "telephony";
   const canTestCall = isTelephony && Boolean(raw?.linked_phone_number);
+  const showTestButton = isTelephony ? access.canDial : access.canTestBrowser;
   const status = linkStatus(raw);
   const statusStyle = LINK_STATUS_STYLES[status.tone];
   const createdByName = raw?.created_by ? nameFromEmail(raw.created_by) : null;
@@ -298,8 +317,8 @@ function AgentCard({
       <div className="flex min-w-0 items-start justify-between gap-2">
         <button
           type="button"
-          onClick={onOpenEdit}
-          className="min-w-0 flex-1 cursor-pointer overflow-hidden text-left"
+          onClick={access.canWrite ? onOpenEdit : undefined}
+          className={`min-w-0 flex-1 overflow-hidden text-left ${access.canWrite ? "cursor-pointer" : "cursor-default"}`}
         >
           <span
             className="block truncate text-[17px] font-extrabold tracking-[-.35px] text-v-fg"
@@ -314,6 +333,7 @@ function AgentCard({
             actions={cardMenuActions(
               { onOpenEdit, onTestCall, onTestBrowser, onOpenLogs, onDuplicate, onDelete, onArchive },
               Boolean(raw?.archived),
+              access,
             )}
           />
         </div>
@@ -342,22 +362,26 @@ function AgentCard({
 
      
 
-      <div className="flex items-center gap-2 border-t border-v-hairline pt-3.5">
-        {isTelephony ? (
-          <Button variant="outline" size="sm" onClick={onTestCall} disabled={!canTestCall} className="h-[42px] flex-1 justify-center">
-            <Phone className="size-3.5" strokeWidth={1.9} />
-            Test Call
-          </Button>
-        ) : (
-          <Button variant="outline" size="sm" onClick={onTestBrowser} className="h-[42px] flex-1 justify-center">
-            <Laptop className="size-3.5" strokeWidth={1.9} />
-            Test on Browser
-          </Button>
-        )}
-        <IconButton aria-label="Edit agent" onClick={onOpenEdit} className="size-[42px]">
-          <Pencil className="size-4" strokeWidth={1.9} />
-        </IconButton>
-      </div>
+      {showTestButton || access.canWrite ? (
+        <div className="flex items-center gap-2 border-t border-v-hairline pt-3.5">
+          {!showTestButton ? null : isTelephony ? (
+            <Button variant="outline" size="sm" onClick={onTestCall} disabled={!canTestCall} className="h-[42px] flex-1 justify-center">
+              <Phone className="size-3.5" strokeWidth={1.9} />
+              Test Call
+            </Button>
+          ) : (
+            <Button variant="outline" size="sm" onClick={onTestBrowser} className="h-[42px] flex-1 justify-center">
+              <Laptop className="size-3.5" strokeWidth={1.9} />
+              Test on Browser
+            </Button>
+          )}
+          {access.canWrite ? (
+            <IconButton aria-label="Edit agent" onClick={onOpenEdit} className="ml-auto size-[42px]">
+              <Pencil className="size-4" strokeWidth={1.9} />
+            </IconButton>
+          ) : null}
+        </div>
+      ) : null}
     </motion.div>
   );
 }
@@ -366,6 +390,13 @@ const STATS_VISIBLE_KEY = "voicera_stats_visible";
 
 export function AgentsHome({ onNotify }: { onNotify: (title: string, note: string) => void }) {
   const { session } = useAuth();
+  const { can } = usePermissions();
+  const cardAccess: AgentCardAccess = {
+    canWrite: can("agents:write"),
+    canDelete: can("agents:delete"),
+    canTestBrowser: can("calls:test"),
+    canDial: can("calls:dial"),
+  };
   const router = useRouter();
   const [agents, setAgents] = useState<DashboardAgent[]>([]);
   const [statsVisible, setStatsVisible] = useState(() => {
@@ -624,6 +655,11 @@ export function AgentsHome({ onNotify }: { onNotify: (title: string, note: strin
     );
   }
 
+  // A brand-new organisation gets a guided start instead of an empty list.
+  if (!hasAgents && !loadError) {
+    return <FirstAgentWelcome orgName={session?.orgName} canBuild={can("agents:write")} />;
+  }
+
   const roundTripSlow = orgStats.avgDuration !== null && orgStats.avgDuration >= SLOW_AVG_DURATION_SECS;
 
   return (
@@ -667,12 +703,14 @@ export function AgentsHome({ onNotify }: { onNotify: (title: string, note: strin
           >
             <RefreshCw className="size-4" strokeWidth={1.9} />
           </button>
-          <Link href="/agent-creation">
-            <Button data-tour="new-agent-button">
-              <Plus className="size-4" strokeWidth={2.2} />
-              New agent
-            </Button>
-          </Link>
+          {can("agents:write") ? (
+            <Link href="/agent-creation">
+              <Button data-tour="new-agent-button">
+                <Plus className="size-4" strokeWidth={2.2} />
+                New agent
+              </Button>
+            </Link>
+          ) : null}
         </div>
       </div>
 
@@ -762,9 +800,11 @@ export function AgentsHome({ onNotify }: { onNotify: (title: string, note: strin
               ? "Try another word."
               : showArchived
                 ? "Agents you archive will show up here."
-                : "Create your first agent to start taking calls."}
+                : can("agents:write")
+                  ? "Create your first agent to start taking calls."
+                  : "Agents your team builds will show up here."}
           </p>
-          {!query && !showArchived ? (
+          {!query && !showArchived && can("agents:write") ? (
             <div className="mt-4 flex flex-wrap items-center justify-center gap-3">
               <Link href="/agent-creation">
                 <Button>
@@ -786,6 +826,7 @@ export function AgentsHome({ onNotify }: { onNotify: (title: string, note: strin
               busy={busyId === a.id}
               index={index}
               attachedByEmail={phoneNumbersByAgentId[a.id]?.last_link_by_email}
+              access={cardAccess}
               onOpenEdit={() => goToEdit(a.id)}
               onTestCall={() => openTestCall(a.id)}
               onTestBrowser={() => openTestBrowser(a.id)}
@@ -798,11 +839,11 @@ export function AgentsHome({ onNotify }: { onNotify: (title: string, note: strin
         </div>
       )}
 
-      {testAgent && session?.orgId ? (
+      {testAgent && session?.orgId && cardAccess.canTestBrowser ? (
         <AgentTestModal key={testAgent.agent_id} agent={testAgent} orgId={session.orgId} onClose={() => setTestAgentId(null)} />
       ) : null}
 
-      {testCallAgent ? (
+      {testCallAgent && cardAccess.canDial ? (
         <TestCallSheet key={testCallAgent.agent_id} agent={testCallAgent} onClose={() => setTestCallAgentId(null)} onNotify={onNotify} />
       ) : null}
 

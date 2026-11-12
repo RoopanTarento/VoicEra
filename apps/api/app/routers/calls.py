@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Iterator
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -23,7 +24,8 @@ from app.models.schemas import (
     WebCallRegisterRequest,
     WebCallRegisterResponse,
 )
-from app.services import member_service, org_service
+from app import rbac
+from app.services import call_analysis, member_service, org_service
 from app.services.call_log_service import (
     CallLogNotFoundError,
     count_call_logs_by_org,
@@ -42,9 +44,13 @@ from app.services.call_metrics_service import (
 from app.services.inbound_call_service import InboundCallError, register_inbound_call
 from app.services.outbound_call_service import OutboundCallError, initiate_outbound_call
 from app.services.web_call_service import WebCallError, register_web_call
+from app.services.secure.contact_ingest import protect_number
+from app.services.secure.keys import VaultKeyError
+from app.services.secure.masking import mask_call_logs, mask_one
 from app.storage.minio_client import MinIOStorage
 
 router = APIRouter(prefix="/calls", tags=["calls"])
+logger = logging.getLogger(__name__)
 
 
 def _require_active_org(current_user: dict[str, Any]) -> str:
@@ -126,8 +132,21 @@ async def create_outbound_call(
     body: OutboundCallRequest,
     current_user: dict[str, Any] = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """Initiate an outbound call and register a CallLog with status initiated."""
+    """Initiate an outbound call and register a CallLog with status initiated.
+
+    VoicEra Secure: the destination is hashed and encrypted under the
+    adopter's own keys and the CallLog keeps only its contact ID and masked
+    form. The plain number is used for the dial and not stored.
+    """
     org_id = _require_active_org(current_user)
+    contact_id = None
+    try:
+        contact_id = protect_number(
+            org_id, body.to_number, actor_email=str(current_user.get("email") or ""), source={"outbound_api": True}
+        )
+    except VaultKeyError as exc:
+        # Nothing raw is stored either way; the call proceeds without a vault link.
+        logger.warning("Outbound number not vaulted (vault unavailable): %s", exc)
     try:
         return await initiate_outbound_call(
             org_id,
@@ -135,6 +154,7 @@ async def create_outbound_call(
             body.to_number,
             from_number=body.from_number,
             custom_variables=body.custom_variables,
+            contact_id=contact_id,
         )
     except OutboundCallError as exc:
         _raise_outbound_error(exc)
@@ -202,7 +222,7 @@ async def patch_call_by_provider_sid(
         doc = patch_call_log_by_provider_sid(org_id, provider_call_sid, patch)
     except CallLogNotFoundError as exc:
         _raise_call_not_found(exc)
-    return transform_call_log_urls(doc, api_prefix=settings.API_V1_PREFIX)
+    return mask_one(transform_call_log_urls(doc, api_prefix=settings.API_V1_PREFIX), org_id=org_id)
 
 
 @router.patch("/{call_id}", response_model=CallLogResponse)
@@ -223,7 +243,9 @@ async def patch_call(
         doc = patch_call_log(org_id, call_id, patch)
     except CallLogNotFoundError as exc:
         _raise_call_not_found(exc)
-    return transform_call_log_urls(doc, api_prefix=settings.API_V1_PREFIX)
+    if "transcript_url" in patch or "call_response" in patch:
+        await call_analysis.after_call_update(org_id, doc)
+    return mask_one(transform_call_log_urls(doc, api_prefix=settings.API_V1_PREFIX), org_id=org_id)
 
 
 @router.get("/{call_id}/recording")
@@ -275,6 +297,11 @@ async def get_call_transcript(
         call = get_call_log(org_id, call_id)
     except CallLogNotFoundError as exc:
         _raise_call_not_found(exc)
+
+    if call.get("transcript_inline"):
+        label = "SYNTHETIC TEST TRANSCRIPT (mock provider, not a real call)\n\n" if call.get("transcript_source") == "synthetic_mock" else ""
+        text = label + "\n".join(f"{t.get('role', '').upper()}: {t.get('text', '')}" for t in call["transcript_inline"])
+        return StreamingResponse(iter([text.encode("utf-8")]), media_type="text/plain; charset=utf-8")
 
     transcript_url = call.get("transcript_url")
     if not transcript_url:
@@ -336,9 +363,16 @@ async def list_org_calls(
     org_id: str,
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    campaign_id: str | None = Query(default=None, description="Only this campaign's calls"),
+    date_from: str | None = Query(default=None, description="First local day, YYYY-MM-DD"),
+    date_to: str | None = Query(default=None, description="Last local day, YYYY-MM-DD (inclusive)"),
+    tz: str = Query(default="Asia/Kolkata", description="Time zone the days are in"),
     current_user: dict[str, Any] = Depends(get_current_user),
 ) -> CallLogListResponse:
-    """List call logs for an organisation (Bearer; must be a member of that org)."""
+    """List call logs for an organisation (Bearer; must be a member of that org).
+
+    Optional filters: one campaign, and a range of local days (both dates, inclusive).
+    """
     token_org_id = _require_active_org(current_user)
     if org_id != token_org_id:
         membership = member_service.get_membership(current_user["email"], org_id)
@@ -354,13 +388,29 @@ async def list_org_calls(
             detail="Organisation not found",
         )
 
-    logs = list_call_logs_by_org(org_id, limit=limit, offset=offset)
-    total = count_call_logs_by_org(org_id)
+    filters: dict[str, Any] = {}
+    if campaign_id:
+        filters["campaign_id"] = campaign_id
+    if date_from or date_to:
+        from app.services import campaign_insights
+
+        try:
+            start, end = campaign_insights.parse_period(date_from or date_to or "", date_to or date_from or "")
+            lo, hi = campaign_insights.utc_bounds(start, end, campaign_insights.zone(tz))
+        except campaign_insights.InsightsError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        filters["created_at"] = {"$gte": lo, "$lt": hi}
+    logs = list_call_logs_by_org(org_id, limit=limit, offset=offset, filters=filters or None)
+    total = count_call_logs_by_org(org_id, filters=filters or None)
+    details = _can_read_details(current_user, org_id)
     return CallLogListResponse(
-        calls=[
-            transform_call_log_urls(log, api_prefix=settings.API_V1_PREFIX)
-            for log in logs
-        ],
+        calls=mask_call_logs(
+            (
+                call_analysis.visible_to(transform_call_log_urls(log, api_prefix=settings.API_V1_PREFIX), details)
+                for log in logs
+            ),
+            org_id=org_id,
+        ),
         limit=limit,
         offset=offset,
         total=total,
@@ -402,4 +452,32 @@ async def get_call(
         doc = get_call_log(org_id, call_id)
     except CallLogNotFoundError as exc:
         _raise_call_not_found(exc)
-    return transform_call_log_urls(doc, api_prefix=settings.API_V1_PREFIX)
+    doc = call_analysis.visible_to(doc, _can_read_details(current_user, org_id))
+    return mask_one(transform_call_log_urls(doc, api_prefix=settings.API_V1_PREFIX), org_id=org_id)
+
+
+@router.post("/{call_id}/analyze", response_model=CallLogResponse)
+async def analyse_call(
+    call_id: str,
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Run (or re-run) the analysis of one call from its transcript."""
+    org_id = _require_active_org(current_user)
+    try:
+        doc = get_call_log(org_id, call_id)
+    except CallLogNotFoundError as exc:
+        _raise_call_not_found(exc)
+    if str(doc.get("call_response") or "") in ("", "pending"):
+        raise HTTPException(status_code=409, detail="This call hasn't finished yet.")
+    synthetic = str(doc.get("transcript_source") or "") == "synthetic_mock"
+    if str(doc.get("call_response")) == "answered" and not synthetic and not doc.get("transcript_url"):
+        raise HTTPException(status_code=404, detail="No transcript is available for this call yet.")
+    await call_analysis.after_call_update(org_id, {**doc, "analysis": None}, synthetic=synthetic)
+    doc = get_call_log(org_id, call_id)
+    return mask_one(transform_call_log_urls(doc, api_prefix=settings.API_V1_PREFIX), org_id=org_id)
+
+
+def _can_read_details(current_user: dict[str, Any], org_id: str) -> bool:
+    email = str(current_user.get("email") or "")
+    role = str(current_user.get("role") or "") if email == rbac.BOT_SERVICE_EMAIL else rbac.membership_role(email, org_id)
+    return rbac.has_permission(role, "recordings:read")

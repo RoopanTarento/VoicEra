@@ -24,10 +24,18 @@ REDIS_SETTINGS = RedisSettings(
 )
 
 
+async def _on_worker_startup(ctx: dict) -> None:
+    """Mask phone numbers in worker logs; register the mock provider if enabled."""
+    from app.services.secure.startup import configure_secure_runtime
+
+    configure_secure_runtime()
+
+
 class WorkerSettings:
     functions = [sync_campaign_source, process_campaign_batch]
     redis_settings = REDIS_SETTINGS
     max_jobs = 10
+    on_startup = _on_worker_startup
 
 
 _redis_pool: ArqRedis | None = None

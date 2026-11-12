@@ -47,11 +47,14 @@ export function SheetHeader({
   title,
   subtitle,
   icon,
+  actions,
   onClose,
 }: {
   title: string;
   subtitle?: string;
   icon?: ReactNode;
+  /** Optional extra controls (e.g. a history button) rendered before Close. */
+  actions?: ReactNode;
   onClose: () => void;
 }) {
   return (
@@ -69,14 +72,17 @@ export function SheetHeader({
           ) : null}
         </span>
       </div>
-      <button
-        type="button"
-        aria-label="Close"
-        onClick={onClose}
-        className="flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-v-sm text-v-muted transition-colors hover:bg-v-soft hover:text-v-fg"
-      >
-        <X className="size-4" strokeWidth={1.75} />
-      </button>
+      <div className="flex shrink-0 items-center gap-1">
+        {actions}
+        <button
+          type="button"
+          aria-label="Close"
+          onClick={onClose}
+          className="flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-v-sm text-v-muted transition-colors hover:bg-v-soft hover:text-v-fg"
+        >
+          <X className="size-4" strokeWidth={1.75} />
+        </button>
+      </div>
     </div>
   );
 }

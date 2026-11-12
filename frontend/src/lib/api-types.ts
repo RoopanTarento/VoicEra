@@ -1,4 +1,12 @@
-export type UserRole = "super_admin" | "admin" | "member";
+/** Organisation roles (see GET /rbac/roles for labels and permissions). */
+export type UserRole =
+  | "super_admin"
+  | "admin"
+  | "member"
+  | "campaign_manager"
+  | "agent_builder"
+  | "analyst"
+  | "auditor";
 
 export interface OrganisationSummary {
   org_id: string;
@@ -87,6 +95,8 @@ export interface AgentApiResponse {
       top_k: number;
     };
     custom_variables?: Record<string, string>;
+    /** What the agent is for (a scheme agent with its intent, or a city survey), if picked. */
+    use_case?: AgentUseCase | null;
   };
   created_at?: string;
   updated_at?: string;
@@ -121,6 +131,17 @@ export interface PhoneNumberInventoryResponse {
 export type CallLogStatus = "initiated" | "ringing" | "failed" | "in_progress" | "completed";
 
 export type CallType = "inbound" | "outbound" | "web";
+
+/** What a scheme agent's calls are for. */
+export type SchemeIntent = "awareness" | "discovery" | "enrolment" | "utilisation" | "support" | "feedback";
+
+export interface AgentUseCase {
+  /** Agents saved before intents existed come back as "scheme_discovery"; read them through `normaliseUseCase`. */
+  type: "scheme" | "city_survey";
+  intent?: SchemeIntent | null;
+  scheme_ids: string[];
+  survey_id?: string | null;
+}
 
 export type CallResponseStatus = "pending" | "answered" | "busy" | "no_answer" | "failed" | "cancelled";
 
@@ -192,6 +213,52 @@ export interface CallLogItem {
   error_message?: string | null;
   campaign_id?: string | null;
   queued_run_id?: string | null;
+  contact_id?: string | null;
+  /** Outcome, sentiment, summary and agent feedback. Viewers get outcome only. */
+  analysis?: CallAnalysis | null;
+  /** "synthetic_mock" for made-up test transcripts from the mock provider. */
+  transcript_source?: string | null;
+}
+
+export type CallOutcome =
+  | "interested"
+  | "not_interested"
+  | "callback"
+  | "wrong_person"
+  | "no_answer"
+  | "unclear"
+  | "will_apply"
+  | "already_enrolled"
+  | "informed"
+  | "issue_reported"
+  | "no_issue"
+  | "survey_completed"
+  | "survey_partial"
+  | "survey_declined";
+
+export interface CallAnalysis {
+  outcome: CallOutcome;
+  outcome_label: string;
+  analysed_at?: string | null;
+  sentiment?: "positive" | "neutral" | "negative";
+  summary?: string;
+  feedback?: string[];
+  feedback_codes?: string[];
+  /** "llm" (the organisation's OpenAI key) or "rules" (built-in, offline). */
+  engine?: "llm" | "rules";
+  transcript_source?: string | null;
+  /** Problem types the caller mentioned. */
+  issues?: string[];
+  /** The other intent whose path the call took (e.g. an awareness call that became support). */
+  switched_to?: SchemeIntent | null;
+  /** City survey answers, keyed by question id (rating 1-5, yes/no, or short text). */
+  survey?: {
+    survey_id: string;
+    answers: Record<string, number | boolean | string>;
+    answered: number;
+    questions: number;
+    themes: string[];
+  } | null;
 }
 
 export interface CallLogListResponse {
@@ -297,8 +364,12 @@ export interface CampaignApiResponse {
 
 export interface CampaignCsvUploadResponse {
   source_id: string;
+  /** "secure_contacts" when numbers were hashed and encrypted on upload. */
+  source_type?: string;
   filename: string;
   contact_rows: number;
+  new_contacts?: number;
+  protected?: boolean;
 }
 
 export interface CampaignRetryConfig {
@@ -374,3 +445,82 @@ export interface CallAnalyticsResponse {
   agent_performance: AgentCallCount[];
   model_usage: ModelUsageSummary;
 }
+
+// ---------------------------------------------------------------------------
+// Copilot
+// ---------------------------------------------------------------------------
+
+export interface CopilotContext {
+  route?: string;
+  agent_id?: string;
+  call_id?: string;
+  campaign_id?: string;
+}
+
+export interface CopilotToolCallRecord {
+  tool: string;
+  arguments: Record<string, unknown>;
+  ok: boolean;
+  summary?: string | null;
+}
+
+export interface CopilotAttachmentRef {
+  attachment_id: string;
+  content_type: string;
+  original_filename: string;
+}
+
+export interface CopilotMessage {
+  role: "user" | "assistant";
+  content: string;
+  created_at: string;
+  tool_calls: CopilotToolCallRecord[];
+  attachments?: CopilotAttachmentRef[];
+}
+
+export interface CopilotConversationSummary {
+  conversation_id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CopilotConversationDetail {
+  conversation_id: string;
+  org_id: string;
+  title: string;
+  messages: CopilotMessage[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CopilotAgentDraftConfirmResponse {
+  agent_id: string;
+  name: string;
+  status: string;
+}
+
+export interface CopilotCampaignDraftConfirmResponse {
+  campaign_id: string;
+  name: string;
+  state: string;
+}
+
+export interface CopilotVoiceSessionCreateResponse {
+  session_id: string;
+  ws_path: string;
+  conversation_id: string | null;
+}
+
+/** One parsed Copilot SSE event (see apps/api/app/services/copilot/engine.py). */
+export type CopilotStreamEvent =
+  | { type: "start"; conversation_id: string | null }
+  | { type: "token"; text: string }
+  | { type: "tool_call"; tool: string; arguments: Record<string, unknown> }
+  | { type: "tool_result"; tool: string; ok: boolean; data: unknown }
+  | { type: "done"; conversation_id: string | null; text: string }
+  | { type: "error"; message: string }
+  /** The model provider rate-limited this request and the engine is
+   * automatically waiting out its own stated retry time before trying
+   * again — shown as live status, not an error, since it usually recovers. */
+  | { type: "retry_wait"; seconds: number; message: string };

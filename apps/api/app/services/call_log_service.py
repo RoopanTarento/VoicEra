@@ -208,9 +208,9 @@ def _prepare_call_log_list(docs) -> list[dict[str, Any]]:
     )
 
 
-def count_call_logs_by_org(org_id: str) -> int:
-    """Count call logs for an organisation."""
-    return get_database()[COLLECTION].count_documents(_list_query(org_id))
+def count_call_logs_by_org(org_id: str, *, filters: dict[str, Any] | None = None) -> int:
+    """Count call logs for an organisation (optionally filtered, see ``list_call_logs_by_org``)."""
+    return get_database()[COLLECTION].count_documents(_list_query(org_id, extra=filters))
 
 
 def list_call_logs_by_org(
@@ -218,10 +218,12 @@ def list_call_logs_by_org(
     *,
     limit: int = 50,
     offset: int = 0,
+    filters: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """List call logs for an organisation."""
+    """List call logs for an organisation. ``filters`` adds Mongo conditions
+    (e.g. ``campaign_id`` or a ``created_at`` range), newest first."""
     cursor = _paginated_call_log_cursor(
-        _list_query(org_id),
+        _list_query(org_id, extra=filters),
         limit=limit,
         offset=offset,
     )

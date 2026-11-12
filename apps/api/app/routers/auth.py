@@ -13,7 +13,7 @@ from app.models.schemas import (
     ProviderAuthUpsert,
     SuccessResponse,
 )
-from app.services import auth_service
+from app.services import audit_log, auth_service
 from app.services.provider_auth_catalog import (
     UnknownAuthProviderError,
     all_auth_catalog,
@@ -95,7 +95,7 @@ async def upsert_auth(
     _require_write_role(current_user)
     try:
         provider_auth_catalog(body.provider)
-        return auth_service.upsert_provider_auth(
+        result = auth_service.upsert_provider_auth(
             current_user["org_id"],
             body.provider,
             body.auth,
@@ -103,6 +103,18 @@ async def upsert_auth(
     except Exception as exc:
         _catalog_http_error(exc)
         raise
+    # Never include body.auth (raw secrets) in the log — only that this
+    # provider's credentials were touched, by whom, and when.
+    audit_log.record(
+        current_user["org_id"],
+        entity_type="provider_auth",
+        action="updated",
+        actor_email=str(current_user["email"]),
+        actor_role=str(current_user.get("role") or ""),
+        entity_id=body.provider,
+        entity_name=body.provider,
+    )
+    return result
 
 
 @router.get("/{provider}", response_model=ProviderAuthResponse)
@@ -154,4 +166,13 @@ async def delete_auth(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"No auth stored for provider: {provider}",
         )
+    audit_log.record(
+        current_user["org_id"],
+        entity_type="provider_auth",
+        action="deleted",
+        actor_email=str(current_user["email"]),
+        actor_role=str(current_user.get("role") or ""),
+        entity_id=provider,
+        entity_name=provider,
+    )
     return SuccessResponse(message=f"Auth deleted for provider: {provider}")

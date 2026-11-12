@@ -14,6 +14,8 @@ from typing import Any, Dict, Optional
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
+from apps.pii import redact_text
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT = 30.0
@@ -118,15 +120,16 @@ async def request_json(
             except ValueError:
                 return {}, None
     except httpx.HTTPStatusError as e:
-        msg = f"{provider_label} API error: {e.response.text}"
+        # Provider error bodies can echo the request (including numbers).
+        msg = redact_text(f"{provider_label} API error: {e.response.text}")
         logger.error(msg)
         return None, msg
     except httpx.RequestError as e:
-        msg = f"Failed to connect to {provider_label} API: {e}"
+        msg = redact_text(f"Failed to connect to {provider_label} API: {e}")
         logger.error(msg)
         return None, msg
     except Exception as e:
-        msg = f"{provider_label} request error: {e}"
+        msg = redact_text(f"{provider_label} request error: {e}")
         logger.error(msg)
         return None, msg
 

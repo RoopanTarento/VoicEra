@@ -3,7 +3,7 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { getMe } from "@/lib/api-client";
-import { clearSession, getSession, saveSession, type AuthSession } from "@/lib/auth-storage";
+import { clearSession, getSession, isDemoToken, saveSession, type AuthSession } from "@/lib/auth-storage";
 
 interface AuthContextValue {
   session: AuthSession | null;
@@ -27,6 +27,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!stored) {
       setLoading(false);
       router.replace("/");
+      return;
+    }
+
+    if (isDemoToken(stored.accessToken)) {
+      setSession(stored);
+      setLoading(false);
       return;
     }
 

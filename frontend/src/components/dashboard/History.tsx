@@ -5,10 +5,12 @@ import { useSearchParams } from "next/navigation";
 import { ChevronDown, Download, Eye, FileText, RefreshCw, Table, User } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
+import { CallOutcomeBadge } from "@/components/ui/CallOutcomeBadge";
 import { CallTypeBadge, CALL_TYPE_META } from "@/components/ui/CallTypeBadge";
 import { Select } from "@/components/ui/Select";
 import { Spinner } from "@/components/ui/Spinner";
 import { useAuth } from "@/components/AuthProvider";
+import { usePermissions } from "@/components/PermissionsProvider";
 import { listAgents } from "@/lib/api-client";
 import { listAllOrgCalls, listOrgCalls, fetchCallTranscriptText } from "@/lib/api/calls";
 import { parseTranscript } from "@/lib/transcript";
@@ -78,13 +80,14 @@ function presetToRange(preset: DatePreset): { from: string; to: string } {
 }
 
 function callsToCsv(rows: CallLogItem[], meta: ReportMeta): string {
-  const header = ["Call Type", "Agent", "To", "From", "Status", "Called On", "Duration (s)"];
+  const header = ["Call Type", "Agent", "To", "From", "Status", "Outcome", "Called On", "Duration (s)"];
   const dataRows = rows.map((r) => [
     r.call_type,
     r.agent_name ?? r.agent_id,
-    r.to_number,
-    r.from_number,
+    displayToNumber(r),
+    displayFromNumber(r),
     r.status,
+    r.analysis?.outcome_label ?? "",
     r.start_time_utc ?? r.created_at ?? "",
     r.duration ?? "",
   ]);
@@ -98,13 +101,23 @@ interface ExportMenuProps {
   orgId: string | undefined;
   meta: ReportMeta;
   selectedAgent: AgentApiResponse | null;
+  /** Transcript export needs recordings:read. */
+  canExportTranscripts: boolean;
   onNotify: (title: string, note: string) => void;
   onPrint: () => void;
 }
 
 /** Hick's Law: four related-but-distinct actions grouped behind one disclosure
  * rather than four separate top-level buttons, so the toolbar stays scannable. */
-function ExportMenu({ filteredCalls, orgId, meta, selectedAgent, onNotify, onPrint }: ExportMenuProps) {
+function ExportMenu({
+  filteredCalls,
+  orgId,
+  meta,
+  selectedAgent,
+  canExportTranscripts,
+  onNotify,
+  onPrint,
+}: ExportMenuProps) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<"transcripts" | "agent" | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -205,15 +218,19 @@ function ExportMenu({ filteredCalls, orgId, meta, selectedAgent, onNotify, onPri
       disabled: filteredCalls.length === 0,
       loading: false,
     },
-    {
-      key: "transcripts",
-      label: "Export all transcripts",
-      hint: "Every call in this org, CSV",
-      icon: Download,
-      onClick: exportAllTranscripts,
-      disabled: !orgId,
-      loading: busy === "transcripts",
-    },
+    ...(canExportTranscripts
+      ? [
+          {
+            key: "transcripts",
+            label: "Export all transcripts",
+            hint: "Every call in this org, CSV",
+            icon: Download,
+            onClick: exportAllTranscripts,
+            disabled: !orgId,
+            loading: busy === "transcripts",
+          },
+        ]
+      : []),
     {
       key: "agent",
       label: "Export for selected agent",
@@ -223,7 +240,7 @@ function ExportMenu({ filteredCalls, orgId, meta, selectedAgent, onNotify, onPri
       disabled: !orgId || !selectedAgent,
       loading: busy === "agent",
     },
-  ] as const;
+  ];
 
   return (
     <div ref={menuRef} className="relative">
@@ -266,6 +283,7 @@ function ExportMenu({ filteredCalls, orgId, meta, selectedAgent, onNotify, onPri
 
 export function History({ onNotify }: { onNotify: (title: string, note: string) => void }) {
   const { session } = useAuth();
+  const { can } = usePermissions();
   const orgId = session?.orgId;
   const reportMeta: ReportMeta = {
     orgName: session?.orgName ?? session?.orgId ?? "—",
@@ -479,6 +497,7 @@ export function History({ onNotify }: { onNotify: (title: string, note: string) 
             orgId={orgId}
             meta={reportMeta}
             selectedAgent={selectedAgent}
+            canExportTranscripts={can("recordings:read")}
             onNotify={onNotify}
             onPrint={() => window.print()}
           />
@@ -504,7 +523,7 @@ export function History({ onNotify }: { onNotify: (title: string, note: string) 
         </div>
       ) : (
         <div className="overflow-x-auto rounded-v-md border border-v-line bg-white">
-          <table className="w-full min-w-[900px] border-collapse text-sm">
+          <table className="w-full min-w-[1000px] border-collapse text-sm">
             <thead>
               <tr className="border-b border-v-line text-left font-mono text-[10px] uppercase tracking-[.1em] text-v-muted">
                 <th className="px-4 py-3 font-medium">Call Type</th>
@@ -512,6 +531,7 @@ export function History({ onNotify }: { onNotify: (title: string, note: string) 
                 <th className="px-4 py-3 font-medium">To</th>
                 <th className="px-4 py-3 font-medium">From</th>
                 <th className="px-4 py-3 font-medium">Call Status</th>
+                <th className="px-4 py-3 font-medium">Outcome</th>
                 <th className="px-4 py-3 font-medium">Called On</th>
                 <th className="px-4 py-3 font-medium">Duration</th>
                 <th className="px-4 py-3 font-medium">Conversation Data</th>
@@ -529,6 +549,9 @@ export function History({ onNotify }: { onNotify: (title: string, note: string) 
                     <td className="whitespace-nowrap px-4 py-3 text-v-muted">{displayFromNumber(c)}</td>
                     <td className="px-4 py-3">
                       <Badge tone={statusTone(c)}>{c.status.replace("_", " ")}</Badge>
+                    </td>
+                    <td className="px-4 py-3">
+                      <CallOutcomeBadge analysis={c.analysis} />
                     </td>
                     <td className="px-4 py-3 text-v-muted">{formatDateTime(c.start_time_utc ?? c.created_at)}</td>
                     <td className="px-4 py-3 text-v-muted">{formatDuration(c.duration)}</td>
@@ -563,7 +586,14 @@ export function History({ onNotify }: { onNotify: (title: string, note: string) 
       ) : null}
 
       {selectedCall ? (
-        <CallDetailSheet call={selectedCall} onClose={() => setSelectedCall(null)} />
+        <CallDetailSheet
+          key={selectedCall.call_id}
+          call={selectedCall}
+          onClose={() => setSelectedCall(null)}
+          onCallUpdated={(updated) =>
+            setCalls((prev) => prev.map((c) => (c.call_id === updated.call_id ? updated : c)))
+          }
+        />
       ) : null}
     </div>
 

@@ -1,4 +1,5 @@
 import type { AgentApiResponse, AgentCreatePayload } from "@/lib/api-types";
+import { normaliseUseCase } from "@/lib/api/use-cases";
 import type { WizardCatalogs } from "@/lib/use-wizard-catalogs";
 import { buildModelConfigsFromCatalogs } from "@/lib/use-wizard-catalogs";
 import { DEFAULT_FORM, type AgentForm } from "@/lib/wizard-data";
@@ -72,6 +73,7 @@ export function formToAgentCreatePayload(
         top_k: 5,
       },
       custom_variables: form.customVariables,
+      use_case: form.useCase,
     },
   };
 }
@@ -88,6 +90,7 @@ export function agentToForm(agent: AgentApiResponse): AgentForm {
     welcome: prompts.greeting_message ?? DEFAULT_FORM.welcome,
     prompt: prompts.system_prompt ?? DEFAULT_FORM.prompt,
     customVariables: agent.config.custom_variables ?? {},
+    useCase: normaliseUseCase(agent.config.use_case),
     ignoreGreetingSpeech: Boolean(behaviour.ignore_user_speech_before_greeting),
     langs: [language.primary, ...language.secondary].filter(Boolean),
     sttProvider: String(stt.provider ?? ""),

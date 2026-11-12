@@ -47,7 +47,24 @@ def create_organisation(
     }
     db["Organizations"].insert_one(doc)
     doc.pop("_id", None)
+    _provision_adopter_keys(resolved_id)
     return doc
+
+
+def _provision_adopter_keys(org_id: str) -> None:
+    """Give a new organisation its own encryption and hash keys (VoicEra Secure).
+
+    Skipped when no master key is configured; keys are then created on first
+    use once one is.
+    """
+    from app.services.secure import tenant_keys
+    from app.services.secure.keys import VaultKeyError, get_key_provider
+
+    try:
+        get_key_provider()
+        tenant_keys.provision(org_id)
+    except VaultKeyError:
+        logger.info("Adopter keys for %s deferred: master key not configured", org_id)
 
 
 def get_organisations_by_ids(org_ids: list[str]) -> dict[str, dict[str, Any]]:

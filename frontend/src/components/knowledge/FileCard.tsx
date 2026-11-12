@@ -34,7 +34,8 @@ export function FileCard({
   onPreview,
 }: {
   file: KnowledgeFile;
-  onDelete: (file: KnowledgeFile) => void;
+  /** Omit to hide the delete control (roles without knowledge:write). */
+  onDelete?: (file: KnowledgeFile) => void;
   onPreview: (file: KnowledgeFile) => void;
 }) {
   const [stage, setStage] = useState<DeleteStage>("idle");
@@ -50,7 +51,7 @@ export function FileCard({
     setStage("pending");
     timeoutRef.current = window.setTimeout(() => {
       timeoutRef.current = null;
-      onDelete(file);
+      onDelete?.(file);
     }, UNDO_WINDOW_MS);
   }
 
@@ -123,14 +124,16 @@ export function FileCard({
               >
                 <Eye className="size-4" strokeWidth={1.75} />
               </button>
-              <button
-                type="button"
-                aria-label="Delete document"
-                onClick={() => setStage("confirm")}
-                className="flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-md text-[#7A7669] transition-colors hover:bg-[#FBEAE7] hover:text-[#B3483A]"
-              >
-                <Trash2 className="size-4" strokeWidth={1.75} />
-              </button>
+              {onDelete ? (
+                <button
+                  type="button"
+                  aria-label="Delete document"
+                  onClick={() => setStage("confirm")}
+                  className="flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-md text-[#7A7669] transition-colors hover:bg-[#FBEAE7] hover:text-[#B3483A]"
+                >
+                  <Trash2 className="size-4" strokeWidth={1.75} />
+                </button>
+              ) : null}
             </>
           )}
         </span>
@@ -156,7 +159,7 @@ export function FileCardGrid({
   onPreview,
 }: {
   files: KnowledgeFile[];
-  onDelete: (file: KnowledgeFile) => void;
+  onDelete?: (file: KnowledgeFile) => void;
   onPreview: (file: KnowledgeFile) => void;
 }) {
   return (

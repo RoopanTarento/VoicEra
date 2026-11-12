@@ -5,14 +5,24 @@ import { useState } from "react";
 export function Tooltip({
   text,
   children,
+  className = "",
+  side = "bottom",
 }: {
   text: string;
   children: React.ReactNode;
+  /** Merged onto the wrapping span — e.g. "w-full" so the tooltip doesn't
+   * shrink a block-level child (a grid item, a full-width button) to its
+   * content width. */
+  className?: string;
+  /** Which side of the trigger the tooltip opens on — "top" for triggers
+   * pinned near the bottom of the viewport (e.g. a floating launcher)
+   * where opening below would run off-screen. Defaults to "bottom". */
+  side?: "top" | "bottom";
 }) {
   const [open, setOpen] = useState(false);
   return (
     <span
-      className="relative inline-flex"
+      className={`relative inline-flex ${className}`}
       onMouseEnter={() => setOpen(true)}
       onMouseLeave={() => setOpen(false)}
     >
@@ -20,7 +30,9 @@ export function Tooltip({
       {open ? (
         <span
           role="tooltip"
-          className="animate-v-rise absolute left-1/2 top-[calc(100%+8px)] z-50 w-max max-w-64 -translate-x-1/2 rounded-v-sm border border-v-line bg-white px-3 py-2 font-sans text-xs font-normal normal-case leading-relaxed tracking-normal text-v-fg shadow-[0_12px_34px_rgba(11,11,12,.16)]"
+          className={`animate-v-rise absolute left-1/2 z-50 w-max max-w-64 -translate-x-1/2 rounded-v-sm border border-v-line bg-white px-3 py-2 font-sans text-xs font-normal normal-case leading-relaxed tracking-normal text-v-fg shadow-[0_12px_34px_rgba(11,11,12,.16)] ${
+            side === "top" ? "bottom-[calc(100%+8px)]" : "top-[calc(100%+8px)]"
+          }`}
         >
           {text}
         </span>

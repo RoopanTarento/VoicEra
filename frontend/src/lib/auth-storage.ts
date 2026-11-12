@@ -9,6 +9,17 @@ export interface AuthSession {
   role: string;
 }
 
+/** Local-only token for the dev "demo mode" sign-in. It never leaves the
+ * browser: the API client refuses to send it anywhere (see lib/api/http.ts). */
+export const DEMO_TOKEN = "voicera-demo-local";
+
+export function isDemoToken(token: string | null | undefined): boolean {
+  return token === DEMO_TOKEN;
+}
+
+export const DEMO_MESSAGE =
+  "Demo mode: no backend is connected, so this action is unavailable. Sign in with a real account to use it.";
+
 export function getAccessToken(): string | null {
   if (typeof window === "undefined") return null;
   return localStorage.getItem(TOKEN_KEY);

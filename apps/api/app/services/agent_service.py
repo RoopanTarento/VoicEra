@@ -320,8 +320,11 @@ async def update_agent(
     return _to_response(updated)
 
 
-async def delete_agent(org_id: str, agent_id: str) -> None:
-    """Hard-delete an agent in ``org_id`` or raise AgentNotFoundError."""
+async def delete_agent(org_id: str, agent_id: str) -> str | None:
+    """Hard-delete an agent in ``org_id`` or raise AgentNotFoundError.
+
+    Returns the deleted agent's name (for callers like the audit log that
+    want it without a second lookup after it's gone)."""
     collection = get_database()[COLLECTION]
     existing = collection.find_one({"org_id": org_id, "agent_id": agent_id})
     if not existing:
@@ -337,3 +340,4 @@ async def delete_agent(org_id: str, agent_id: str) -> None:
     if result.deleted_count == 0:
         raise AgentNotFoundError(agent_id)
     logger.info("Agent deleted org=%s agent_id=%s", org_id, agent_id)
+    return existing.get("name")

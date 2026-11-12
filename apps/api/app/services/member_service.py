@@ -9,10 +9,17 @@ from typing import Any
 from app.auth import get_password_hash, verify_password
 from app.database import get_database
 from app.database_init import ROLE_ADMIN, ROLE_MEMBER, ROLE_SUPER_ADMIN
+from app.rbac import ASSIGNABLE_ROLES, effective_role, invalidate_cache
 from app.models.schemas import AssignAdminRequest, MemberInvite, RemoveMemberRequest
 from app.services import org_service
 
 logger = logging.getLogger(__name__)
+
+
+def _find_user(email: str) -> dict[str, Any] | None:
+    from app.services.user_service import find_user  # local import: user_service imports this module
+
+    return find_user(email)
 
 
 def get_membership(email: str, org_id: str) -> dict[str, Any] | None:
@@ -66,6 +73,12 @@ def invite_member(
         if not org_service.get_organisation(org_id):
             return {"status": "fail", "message": "Organization not found"}
 
+        role = (getattr(invite, "role", None) or ROLE_MEMBER).strip()
+        if role not in ASSIGNABLE_ROLES:
+            return {"status": "fail", "message": f"Unknown role: {role}"}
+        if role == ROLE_ADMIN and caller_role != ROLE_SUPER_ADMIN:
+            return {"status": "fail", "message": "Only the Super admin can invite Admins"}
+
         db = get_database()
         users = db["Users"]
         memberships = db["Memberships"]
@@ -76,7 +89,7 @@ def invite_member(
                 "message": "User is already a member of this organization",
             }
 
-        existing_user = users.find_one({"email": invite.email})
+        existing_user = _find_user(invite.email)
         now = datetime.now(timezone.utc).isoformat()
 
         if existing_user:
@@ -88,6 +101,10 @@ def invite_member(
                         "That password doesn't match your existing account."
                     ),
                 }
+            if str(existing_user["email"]) != invite.email:
+                invite = invite.model_copy(update={"email": str(existing_user["email"])})
+                if memberships.find_one({"email": invite.email, "org_id": org_id}):
+                    return {"status": "fail", "message": "User is already a member of this organization"}
         else:
             users.insert_one(
                 {
@@ -102,7 +119,7 @@ def invite_member(
             {
                 "email": invite.email,
                 "org_id": org_id,
-                "role": ROLE_MEMBER,
+                "role": role,
                 "created_at": now,
             }
         )
@@ -116,18 +133,21 @@ def invite_member(
             "status": "success",
             "message": "Member invited successfully",
             "org_id": org_id,
-            "role": ROLE_MEMBER,
+            "role": role,
         }
     except Exception as exc:
         logger.error("Error inviting member: %s", exc)
         return {"status": "fail", "message": f"Error inviting member: {exc}"}
 
 
-def join_organisation(email: str, password: str, org_id: str) -> dict[str, Any]:
-    """Public self-serve join: create account or verify existing password, add member role."""
+def join_organisation(email: str, password: str, org_id: str, role: str = ROLE_MEMBER) -> dict[str, Any]:
+    """Accept an invitation: create the account (or verify its password) and add the membership."""
     try:
-        if not org_service.get_organisation(org_id):
+        org = org_service.get_organisation(org_id)
+        if not org:
             return {"status": "fail", "message": "Organization not found"}
+        if str(org.get("status") or "active") != "active":
+            return {"status": "fail", "message": "This organisation isn't accepting new members right now."}
 
         db = get_database()
         users = db["Users"]
@@ -139,7 +159,7 @@ def join_organisation(email: str, password: str, org_id: str) -> dict[str, Any]:
                 "message": "User is already a member of this organization",
             }
 
-        existing_user = users.find_one({"email": email})
+        existing_user = _find_user(email)
         now = datetime.now(timezone.utc).isoformat()
         is_new_user = existing_user is None
 
@@ -150,6 +170,9 @@ def join_organisation(email: str, password: str, org_id: str) -> dict[str, Any]:
                     "status": "fail",
                     "message": "That password doesn't match your existing account.",
                 }
+            email = str(existing_user["email"])
+            if memberships.find_one({"email": email, "org_id": org_id}):
+                return {"status": "fail", "message": "User is already a member of this organization"}
         else:
             users.insert_one(
                 {
@@ -164,17 +187,17 @@ def join_organisation(email: str, password: str, org_id: str) -> dict[str, Any]:
             {
                 "email": email,
                 "org_id": org_id,
-                "role": ROLE_MEMBER,
+                "role": role,
                 "created_at": now,
             }
         )
-        logger.info("User %s joined org %s via public join", email, org_id)
+        logger.info("User %s joined org %s by invitation", email, org_id)
         return {
             "status": "success",
             "message": "Joined organisation successfully",
             "email": email,
             "org_id": org_id,
-            "role": ROLE_MEMBER,
+            "role": role,
             "is_first_login": is_new_user,
         }
     except Exception as exc:
@@ -193,7 +216,7 @@ def get_members_by_org(org_id: str) -> dict[str, Any]:
             members.append(
                 {
                     "email": doc.get("email"),
-                    "role": doc.get("role", ROLE_MEMBER),
+                    "role": effective_role(doc.get("role", ROLE_MEMBER)),
                     "created_at": doc.get("created_at"),
                 }
             )
@@ -250,18 +273,55 @@ def assign_admin(
         return {"status": "fail", "message": f"Error assigning admin: {exc}"}
 
 
+def set_role(
+    target_email: str,
+    new_role: str,
+    *,
+    caller_email: str,
+    caller_role: str,
+    org_id: str,
+) -> dict[str, Any]:
+    """Change a member's role.
+
+    The Super admin can assign any role except Super admin. Admins can assign
+    every role except Admin, and cannot change another Admin. Nobody changes
+    their own role or the Super admin's.
+    """
+    if new_role not in ASSIGNABLE_ROLES:
+        return {"status": "fail", "message": f"Unknown role: {new_role}"}
+    if target_email == caller_email:
+        return {"status": "fail", "message": "You can't change your own role"}
+    if caller_role not in {ROLE_SUPER_ADMIN, ROLE_ADMIN}:
+        return {"status": "fail", "message": "Only the Super admin and Admins can change roles"}
+    memberships = get_database()["Memberships"]
+    target = memberships.find_one({"email": target_email, "org_id": org_id})
+    if not target:
+        return {"status": "fail", "message": "Member not found in this organization"}
+    current = str(effective_role(target.get("role")) or ROLE_MEMBER)
+    if current == ROLE_SUPER_ADMIN:
+        return {"status": "fail", "message": "The Super admin's role can't be changed"}
+    if caller_role == ROLE_ADMIN and (current == ROLE_ADMIN or new_role == ROLE_ADMIN):
+        return {"status": "fail", "message": "Only the Super admin can grant or change the Admin role"}
+    if current == new_role:
+        return {"status": "success", "message": "Role unchanged", "role": new_role, "previous_role": current}
+    memberships.update_one({"email": target_email, "org_id": org_id}, {"$set": {"role": new_role}})
+    invalidate_cache()
+    logger.info("Role change in org %s: %s %s -> %s (by %s)", org_id, target_email, current, new_role, caller_email)
+    return {"status": "success", "message": "Role updated", "role": new_role, "previous_role": current}
+
+
 def remove_member(
     request: RemoveMemberRequest,
     caller_email: str,
     org_id: str,
     caller_role: str,
 ) -> dict[str, Any]:
-    """Remove a membership (super_admin only)."""
+    """Remove a membership. Admins can't remove the Super admin or other Admins."""
     try:
-        if caller_role != ROLE_SUPER_ADMIN:
+        if caller_role not in {ROLE_SUPER_ADMIN, ROLE_ADMIN}:
             return {
                 "status": "fail",
-                "message": "Only super admins can remove members",
+                "message": "Only the Super admin and Admins can remove members",
             }
 
         if request.email == caller_email:
@@ -272,6 +332,9 @@ def remove_member(
         target = memberships.find_one({"email": request.email, "org_id": org_id})
         if not target:
             return {"status": "fail", "message": "Member not found in this organization"}
+
+        if caller_role == ROLE_ADMIN and target.get("role") in {ROLE_SUPER_ADMIN, ROLE_ADMIN}:
+            return {"status": "fail", "message": "Admins can't remove the Super admin or other Admins"}
 
         if target.get("role") == ROLE_SUPER_ADMIN:
             if count_super_admins(org_id) <= 1:

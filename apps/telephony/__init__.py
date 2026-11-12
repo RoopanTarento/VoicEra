@@ -63,6 +63,7 @@ from apps.telephony.webhooks import (
     parse_stream_start,
     parse_webhook_form,
     resolve_provider_call_sid,
+    sanitize_webhook_payload,
 )
 from apps.telephony.xml import build_answer_stream_xml
 
@@ -105,4 +106,5 @@ __all__ = [
     "merge_webhook_payload",
     "parse_stream_start",
     "resolve_provider_call_sid",
+    "sanitize_webhook_payload",
 ]

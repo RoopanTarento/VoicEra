@@ -9,6 +9,7 @@ from typing import Any
 
 from app.services import agent_service, call_log_service
 from app.services.agent_service import AgentNotFoundError
+from apps.pii import mask_phone
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +61,9 @@ def register_inbound_call(
         raise InboundCallError(str(exc), status_code=404) from exc
 
     sid = _require_provider_call_sid(provider_call_sid)
-    resolved_from = from_number or "unknown"
+    # The caller's number is contact PII: keep only its masked form. The
+    # agent's own DID (``to_number``) is a business number and stays as-is.
+    resolved_from = mask_phone(from_number) if from_number else "unknown"
     resolved_to = to_number or "unknown"
     if resolved_to == "unknown":
         linked = str(agent.get("linked_phone_number") or "").strip()

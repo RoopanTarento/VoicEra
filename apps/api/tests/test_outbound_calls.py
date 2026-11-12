@@ -233,7 +233,8 @@ def test_outbound_call_happy_path(
     assert body["status"] == "ringing"
     assert body["provider_call_sid"] == "provider-sid-123"
     assert body["from_number"] == "+15559876543"
-    assert body["to_number"] == "+14155551234"
+    # VoicEra Secure: the callee number is masked in the response and CallLog.
+    assert body["to_number"] == "+1 ******1234"
     assert body["custom_variables"] == {"customer_name": "Jane"}
     assert len(_CALL_STORE) == 1
     stored = next(iter(_CALL_STORE.values()))

@@ -12,7 +12,7 @@ const MOCK_USER = {
   username: "roopan",
   email: "roopan@cossindia.org",
   org: "COSS India",
-  role: "Owner",
+  role: "Super admin",
 };
 
 export async function POST(req: NextRequest) {

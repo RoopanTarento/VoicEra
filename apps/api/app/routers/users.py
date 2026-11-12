@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from app.auth import create_access_token, get_current_user, verify_api_key
 from app.database_init import ROLE_ADMIN
@@ -20,12 +20,10 @@ from app.models.schemas import (
     UserLoginResponse,
     UserResponse,
 )
+from app.rbac import BOT_SERVICE_EMAIL  # synthetic subject for service JWTs
 from app.services import org_service, user_service
 
 router = APIRouter(prefix="/users", tags=["users"])
-
-# Synthetic subject for service JWTs minted via INTERNAL_API_KEY.
-BOT_SERVICE_EMAIL = "bot@voicera.internal"
 
 
 @router.post("/signup", response_model=UserLoginResponse, status_code=status.HTTP_201_CREATED)
@@ -41,12 +39,26 @@ async def sign_up(user_data: UserCreate) -> dict[str, Any]:
 
 
 @router.post("/login", response_model=UserLoginResponse)
-async def login(credentials: UserLogin) -> dict[str, Any]:
-    """Authenticate and return a JWT for the user's default organisation."""
+async def login(credentials: UserLogin, request: Request) -> dict[str, Any]:
+    """Authenticate and return a JWT for the user's default active organisation.
+
+    401 wrong email or password (one message for both); 429 after repeated
+    failures (``Retry-After`` set); 403 when every organisation the user
+    belongs to is suspended or offboarded.
+    """
     result = user_service.validate_user_and_get_token(
         credentials.email,
         credentials.password,
+        ip=request.client.host if request.client else None,
     )
+    if result["status"] == "locked":
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=result["message"],
+            headers={"Retry-After": str(result.get("retry_after") or 900)},
+        )
+    if result["status"] == "forbidden":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=result["message"])
     if result["status"] == "fail":
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

@@ -291,6 +291,80 @@ class BackendClient:
                 f"POST campaign/call-status failed ({response.status_code}): {response.text}"
             )
 
+    async def get_copilot_voice_session(self, session_id: str) -> dict[str, Any]:
+        """Redeem a Copilot voice session; returns org/agent bundle to run the pipeline.
+
+        Internal-only call (X-API-Key), same trust boundary as
+        retrieve_knowledge_chunks below — no per-org bot JWT involved since
+        the session hasn't resolved an org_id yet at this point.
+        """
+        internal_api_key = os.getenv("INTERNAL_API_KEY", "")
+        if not internal_api_key:
+            raise BackendError("INTERNAL_API_KEY is not configured")
+        url = f"{self._base()}/copilot/voice/session/{session_id}/bundle"
+        headers = {"X-API-Key": internal_api_key, "Accept": "application/json"}
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(url, headers=headers)
+        if response.status_code == 404:
+            raise BackendError(f"Voice session not found or expired: {session_id}")
+        if response.status_code >= 400:
+            raise BackendError(
+                f"GET copilot voice session failed ({response.status_code}): {response.text}"
+            )
+        return response.json()
+
+    async def call_copilot_voice_tool(
+        self,
+        session_id: str,
+        tool: str,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Execute one Copilot tool call mid-voice-conversation (internal)."""
+        internal_api_key = os.getenv("INTERNAL_API_KEY", "")
+        if not internal_api_key:
+            raise BackendError("INTERNAL_API_KEY is not configured")
+        url = f"{self._base()}/copilot/voice/session/{session_id}/tool"
+        headers = {
+            "X-API-Key": internal_api_key,
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                url, headers=headers, json={"tool": tool, "arguments": arguments}
+            )
+        if response.status_code >= 400:
+            raise BackendError(
+                f"POST copilot voice tool failed ({response.status_code}): {response.text}"
+            )
+        return response.json()
+
+    async def append_copilot_voice_turn(
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+    ) -> None:
+        """Append one completed spoken turn to the linked text conversation, if any.
+
+        Fail-open by design (same posture as retrieve_knowledge_chunks) — a
+        history-persistence hiccup must never interrupt a live voice call.
+        """
+        internal_api_key = os.getenv("INTERNAL_API_KEY", "")
+        if not internal_api_key or not content.strip():
+            return
+        url = f"{self._base()}/copilot/voice/session/{session_id}/turn"
+        headers = {
+            "X-API-Key": internal_api_key,
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                await client.post(url, headers=headers, json={"role": role, "content": content})
+        except Exception as exc:
+            logger.debug("Copilot voice turn persistence failed: {}", exc)
+
     async def retrieve_knowledge_chunks(
         self,
         *,

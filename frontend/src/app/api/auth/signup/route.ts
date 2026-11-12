@@ -43,7 +43,7 @@ export async function POST(req: NextRequest) {
         username,
         email: `${username}@cossindia.org`,
         org: "COSS India",
-        role: "Owner",
+        role: "Super admin",
       },
       token: `mock-token-${Buffer.from(username).toString("base64url")}`,
     },

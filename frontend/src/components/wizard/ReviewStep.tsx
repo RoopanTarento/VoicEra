@@ -5,6 +5,7 @@ import { Pencil } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Spinner } from "@/components/ui/Spinner";
 import { useAuth } from "@/components/AuthProvider";
+import { usePermissions } from "@/components/PermissionsProvider";
 import { createAgent, updateAgent } from "@/lib/api-client";
 import { formToAgentCreatePayload } from "@/lib/agent-mapper";
 import { BrowserCallSession } from "@/components/call/BrowserCallSession";
@@ -140,6 +141,7 @@ export function ReviewStep({
   onEditStep,
 }: ReviewStepProps) {
   const { session } = useAuth();
+  const { can } = usePermissions();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -210,7 +212,11 @@ export function ReviewStep({
       {error ? <span className="text-[12.5px] text-v-danger">{error}</span> : null}
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_300px]">
-        {agentId && session?.orgId ? (
+        {!can("calls:test") ? (
+          <div className="flex min-h-[260px] items-center justify-center rounded-v-md border border-dashed border-v-line bg-white p-8 text-center text-[13px] font-light text-v-muted">
+            Your role can&apos;t place test calls.
+          </div>
+        ) : agentId && session?.orgId ? (
           <BrowserCallSession orgId={session.orgId} agentId={agentId} agentName={form.name} />
         ) : (
           <div className="flex min-h-[260px] flex-col items-center justify-center gap-2 rounded-v-md border border-dashed border-v-line bg-white p-8 text-center">

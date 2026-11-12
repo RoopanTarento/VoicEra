@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { Spinner } from "@/components/ui/Spinner";
 import { Dialog, DialogHeader } from "@/components/ui/Dialog";
+import { usePermissions } from "@/components/PermissionsProvider";
 import { usePhoneNumbers } from "@/hooks/usePhoneNumbers";
 import { listProviderInventory } from "@/lib/api/phone-numbers";
 import type { AgentApiResponse, PhoneNumberItem } from "@/lib/api-types";
@@ -367,6 +368,8 @@ export function PhoneNumbers({ onNotify }: { onNotify: (title: string, note: str
     attachToAgent,
     detach,
   } = usePhoneNumbers(onNotify);
+  // Adding, attaching and detaching numbers: Super admin and Admin.
+  const canWrite = usePermissions().can("numbers:write");
   const [query, setQuery] = useState("");
   const [addOpen, setAddOpen] = useState(false);
   const [attachTarget, setAttachTarget] = useState<PhoneNumberItem | null>(null);
@@ -402,10 +405,12 @@ export function PhoneNumbers({ onNotify }: { onNotify: (title: string, note: str
             Import numbers from your telephony provider and attach them to agents.
           </p>
         </div>
-        <Button onClick={() => setAddOpen(true)}>
-          <Phone className="size-4" strokeWidth={1.75} />
-          Add New Number
-        </Button>
+        {canWrite ? (
+          <Button onClick={() => setAddOpen(true)}>
+            <Phone className="size-4" strokeWidth={1.75} />
+            Add New Number
+          </Button>
+        ) : null}
       </div>
 
       {loadError ? (
@@ -445,7 +450,7 @@ export function PhoneNumbers({ onNotify }: { onNotify: (title: string, note: str
                 <th className="px-4 py-3 font-medium">Added On</th>
                 <th className="px-4 py-3 font-medium">Provider</th>
                 <th className="px-4 py-3 font-medium">Used By</th>
-                <th className="px-4 py-3 text-right font-medium">Actions</th>
+                {canWrite ? <th className="px-4 py-3 text-right font-medium">Actions</th> : null}
               </tr>
             </thead>
             <tbody>
@@ -467,23 +472,25 @@ export function PhoneNumbers({ onNotify }: { onNotify: (title: string, note: str
                         <Badge tone="accent">{providerLabel(providers, n.provider)}</Badge>
                       </td>
                       <td className="px-4 py-3">{agentName ?? <span className="text-v-muted">–</span>}</td>
-                      <td className="px-4 py-3 text-right">
-                        {n.agent_id ? (
-                          <Button variant="danger-outline" size="sm" disabled={busy} onClick={() => setDetachTarget(n)}>
-                            {busy ? <Spinner light={false} /> : <Unlink className="size-3.5" strokeWidth={1.75} />}
-                            Detach
-                          </Button>
-                        ) : (
-                          <Button variant="primary" size="sm" disabled={busy} onClick={() => setAttachTarget(n)}>
-                            {busy ? <Spinner /> : <Link2 className="size-3.5" strokeWidth={1.75} />}
-                            Attach
-                          </Button>
-                        )}
-                      </td>
+                      {canWrite ? (
+                        <td className="px-4 py-3 text-right">
+                          {n.agent_id ? (
+                            <Button variant="danger-outline" size="sm" disabled={busy} onClick={() => setDetachTarget(n)}>
+                              {busy ? <Spinner light={false} /> : <Unlink className="size-3.5" strokeWidth={1.75} />}
+                              Detach
+                            </Button>
+                          ) : (
+                            <Button variant="primary" size="sm" disabled={busy} onClick={() => setAttachTarget(n)}>
+                              {busy ? <Spinner /> : <Link2 className="size-3.5" strokeWidth={1.75} />}
+                              Attach
+                            </Button>
+                          )}
+                        </td>
+                      ) : null}
                     </tr>
                     {activity ? (
                       <tr className="border-b border-v-line bg-v-soft/40 last:border-b-0">
-                        <td colSpan={5} className="px-4 py-2 text-xs font-light text-v-muted">
+                        <td colSpan={canWrite ? 5 : 4} className="px-4 py-2 text-xs font-light text-v-muted">
                           <span className="inline-flex items-center gap-1.5">
                             <Link2 className="size-3 shrink-0" strokeWidth={1.75} />
                             {activity}

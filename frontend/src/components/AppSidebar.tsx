@@ -4,13 +4,18 @@ import { useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import {
   Activity,
+  Building2,
   BookOpen,
   Clock,
   FileText,
   Hash,
+  KeySquare,
   Layers,
+  ListChecks,
   PlayCircle,
   Plug,
+  ScrollText,
+  Sparkles,
   TrendingUp,
   User,
   Users,
@@ -19,6 +24,7 @@ import { NavRail, type NavGroup } from "@/components/ui/NavRail";
 import { ProfileMenu } from "@/components/ui/ProfileMenu";
 import { useAuth } from "@/components/AuthProvider";
 import { useWalkthrough } from "@/components/walkthrough";
+import { usePermissions } from "@/components/PermissionsProvider";
 
 const iconClass = "size-[17px] shrink-0";
 const SIDEBAR_EXPANDED_KEY = "voicera_sidebar_expanded";
@@ -28,6 +34,7 @@ export function AppSidebar() {
   const router = useRouter();
   const { session, signOut } = useAuth();
   const { restart: restartWalkthrough } = useWalkthrough();
+  const { can, me } = usePermissions();
 
   const [expanded, setExpanded] = useState(() => {
     if (typeof window === "undefined") return true;
@@ -49,6 +56,13 @@ export function AppSidebar() {
     {
       label: "Build",
       items: [
+        {
+          key: "agent-builder",
+          label: "Agent Builder",
+          icon: <Sparkles className={iconClass} strokeWidth={1.8} />,
+          active: isRoute("/agent-builder"),
+          onClick: () => router.push("/agent-builder"),
+        },
         {
           key: "dash",
           label: "Agents",
@@ -72,6 +86,13 @@ export function AppSidebar() {
           active: isRoute("/knowledge-base"),
           onClick: () => router.push("/knowledge-base"),
           tourId: "nav-kb",
+        },
+        {
+          key: "contact-lists",
+          label: "Contact Lists",
+          icon: <ListChecks className={iconClass} strokeWidth={1.8} />,
+          active: isRoute("/contact-lists"),
+          onClick: () => router.push("/contact-lists"),
         },
         {
           key: "batches",
@@ -107,6 +128,24 @@ export function AppSidebar() {
         },
       ],
     },
+    ...(can("platform:manage")
+      ? [
+          {
+            // VoicEra operators only: adopters and platform-wide audit.
+            label: "Platform",
+            items: [
+              { key: "platform-adopters", label: "Adopters", path: "/platform/adopters", icon: Building2 },
+              { key: "platform-audit", label: "Platform audit", path: "/platform/audit", icon: ScrollText },
+            ].map(({ key, label, path, icon: Icon }) => ({
+              key,
+              label,
+              icon: <Icon className={iconClass} strokeWidth={1.8} />,
+              active: isRoute(path),
+              onClick: () => router.push(path),
+            })),
+          },
+        ]
+      : []),
     {
       label: "Workspace",
       items: [
@@ -117,6 +156,13 @@ export function AppSidebar() {
           active: isRoute("/members"),
           onClick: () => router.push("/members"),
           tourId: "nav-members",
+        },
+        {
+          key: "roles",
+          label: "Roles & Permissions",
+          icon: <KeySquare className={iconClass} strokeWidth={1.8} />,
+          active: isRoute("/roles"),
+          onClick: () => router.push("/roles"),
         },
         {
           key: "integrations",
@@ -130,9 +176,27 @@ export function AppSidebar() {
     },
   ];
 
+  // Hide what the signed-in role can't use (the API enforces it regardless).
+  const ITEM_PERMISSION: Record<string, string> = {
+    "agent-builder": "copilot:use",
+    dash: "agents:read",
+    "contact-lists": "lists:read",
+    numbers: "numbers:read",
+    kb: "knowledge:read",
+    batches: "campaigns:read",
+    history: "calls:read",
+    analytics: "analytics:read",
+    telemetry: "telemetry:read",
+    members: "members:read",
+    integrations: "integrations:read",
+  };
+  const visibleGroups = groups
+    .map((g) => ({ ...g, items: g.items.filter((item) => !ITEM_PERMISSION[item.key] || can(ITEM_PERMISSION[item.key]!)) }))
+    .filter((g) => g.items.length > 0);
+
   return (
     <NavRail
-      groups={groups}
+      groups={visibleGroups}
       expanded={expanded}
       onToggleExpanded={toggleExpanded}
       onBrandClick={() => router.push("/dashboard")}
@@ -164,7 +228,7 @@ export function AppSidebar() {
             email={session?.email ?? ""}
             org={session?.orgName ?? ""}
             orgId={session?.orgId ?? ""}
-            role={session?.role ?? "member"}
+            role={me?.role ?? session?.role ?? "member"}
             expanded={expanded}
             onAccount={() => router.push("/account")}
             onMembers={() => router.push("/members")}

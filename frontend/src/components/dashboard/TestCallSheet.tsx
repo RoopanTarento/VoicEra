@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/Field";
 import { Spinner } from "@/components/ui/Spinner";
 import { Sheet, SheetHeader } from "@/components/ui/Sheet";
 import { createOutboundCall } from "@/lib/api/calls";
+import { maskPhoneNumber } from "@/lib/format";
 import type { AgentApiResponse } from "@/lib/api-types";
 
 const E164_RE = /^\+[1-9]\d{6,14}$/;
@@ -49,7 +50,7 @@ export function TestCallSheet({ agent, onClose, onNotify }: TestCallSheetProps) 
         to_number: trimmed,
         ...(variableKeys.length > 0 ? { custom_variables } : {}),
       });
-      onNotify("Test call started", `Calling ${trimmed} — status: ${call.status}.`);
+      onNotify("Test call started", `Calling ${maskPhoneNumber(trimmed)} — status: ${call.status}.`);
       onClose();
     } catch (err) {
       onNotify("Couldn't start test call", err instanceof Error ? err.message : "Something went wrong.");

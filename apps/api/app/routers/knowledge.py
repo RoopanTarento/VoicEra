@@ -22,7 +22,7 @@ from app.models.schemas import (
     KnowledgeDocumentResponse,
     KnowledgeUploadResponse,
 )
-from app.services import knowledge_service
+from app.services import audit_log, knowledge_service
 from app.storage.minio_client import MinIOStorage
 
 router = APIRouter(prefix="/knowledge", tags=["knowledge"])
@@ -157,6 +157,16 @@ async def upload_knowledge_pdf(
         content,
     )
 
+    audit_log.record(
+        org_id,
+        entity_type="knowledge_document",
+        action="created",
+        actor_email=str(current_user["email"]),
+        actor_role=str(current_user.get("role") or ""),
+        entity_id=document_id,
+        entity_name=file.filename,
+    )
+
     return KnowledgeUploadResponse(
         document_id=document_id,
         org_id=org_id,
@@ -182,7 +192,7 @@ async def delete_knowledge_document(
             detail="User has no organization",
         )
     try:
-        knowledge_service.delete_knowledge_document(org_id, document_id)
+        deleted_filename = knowledge_service.delete_knowledge_document(org_id, document_id)
     except knowledge_service.KnowledgeDocumentNotFoundError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -193,4 +203,13 @@ async def delete_knowledge_document(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=exc.message,
         ) from exc
+    audit_log.record(
+        org_id,
+        entity_type="knowledge_document",
+        action="deleted",
+        actor_email=str(current_user["email"]),
+        actor_role=str(current_user.get("role") or ""),
+        entity_id=document_id,
+        entity_name=deleted_filename,
+    )
     return KnowledgeDeleteResponse(deleted=True)

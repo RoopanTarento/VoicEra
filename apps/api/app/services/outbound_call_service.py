@@ -16,6 +16,7 @@ from app.services.agent_telephony_service import (
     get_provider_dial_credentials,
 )
 from app.services.phone_number_service import PhoneNumberNotFoundError
+from apps.pii import mask_phone, redact_text, scrub_mapping
 from apps.telephony import initiate_outbound
 
 logger = logging.getLogger(__name__)
@@ -39,8 +40,9 @@ def _now_iso() -> str:
 def _normalize_phone(number: str, *, field: str) -> str:
     cleaned = (number or "").strip().replace(" ", "").replace("-", "")
     if not cleaned or not _PHONE_RE.match(cleaned):
+        # Never echo the rejected value: it may be a real contact number.
         raise OutboundCallError(
-            f"Invalid {field}: {number!r}. Expected E.164-style digits (7–15).",
+            f"Invalid {field}. Expected E.164-style digits (7–15).",
             status_code=422,
         )
     if not cleaned.startswith("+"):
@@ -114,8 +116,16 @@ async def initiate_outbound_call(
     *,
     from_number: str | None = None,
     custom_variables: dict[str, Any] | None = None,
+    contact_id: str | None = None,
 ) -> dict[str, Any]:
-    """Validate agent, create CallLog, and place an outbound call."""
+    """Validate agent, create CallLog, and place an outbound call.
+
+    The destination is the callee's real number and is used only for the
+    provider dial request. The CallLog stores it masked (plus ``contact_id``
+    when the call came from the VoicEra Secure vault), and custom variables
+    are scrubbed of phone numbers before they are stored or handed to the
+    voice runtime.
+    """
     try:
         agent = agent_service.get_agent(org_id, agent_id)
     except AgentNotFoundError as exc:
@@ -124,7 +134,8 @@ async def initiate_outbound_call(
     provider = _require_telephony_agent(agent)
     normalized_to = _normalize_phone(to_number, field="to_number")
     normalized_from = _resolve_from_number(org_id, agent_id, agent, from_number)
-    variables = dict(custom_variables or {})
+    masked_to = mask_phone(normalized_to)
+    variables = scrub_mapping(custom_variables)
 
     call_id = str(uuid.uuid4())
     now = _now_iso()
@@ -139,7 +150,8 @@ async def initiate_outbound_call(
         "status": "initiated",
         "call_response": "pending",
         "from_number": normalized_from,
-        "to_number": normalized_to,
+        "to_number": masked_to,
+        "contact_id": contact_id,
         "telephony_provider": provider,
         "custom_variables": variables,
         "created_at": now,
@@ -176,14 +188,14 @@ async def initiate_outbound_call(
             hangup_url=hangup_url,
         )
     except ValueError as exc:
-        message = str(exc)
+        message = redact_text(str(exc))
         call_log_service.update_call_log(
             call_id,
             {"status": "failed", "call_response": "failed", "error_message": message},
         )
         raise OutboundCallError(message, status_code=502) from exc
     except Exception as exc:
-        message = str(exc) or "Telephony dial failed"
+        message = redact_text(str(exc)) or "Telephony dial failed"
         call_log_service.update_call_log(
             call_id,
             {"status": "failed", "call_response": "failed", "error_message": message},
@@ -191,7 +203,7 @@ async def initiate_outbound_call(
         raise OutboundCallError(message, status_code=502) from exc
 
     if result.get("status") != "success":
-        message = str(result.get("message") or "Telephony dial failed")
+        message = redact_text(str(result.get("message") or "Telephony dial failed"))
         call_log_service.update_call_log(
             call_id,
             {"status": "failed", "call_response": "failed", "error_message": message},
@@ -212,7 +224,8 @@ async def initiate_outbound_call(
         "status": updated.get("status", "ringing"),
         "provider_call_sid": provider_call_sid,
         "from_number": normalized_from,
-        "to_number": normalized_to,
+        "to_number": masked_to,
+        "contact_id": contact_id,
         "agent_id": agent_id,
         "custom_variables": variables,
     }

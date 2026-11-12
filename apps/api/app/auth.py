@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import logging
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -131,7 +132,9 @@ async def verify_api_key(
             detail="Missing API key",
         )
 
-    if x_api_key != settings.INTERNAL_API_KEY:
+    if not hmac.compare_digest(
+        x_api_key.encode("utf-8"), settings.INTERNAL_API_KEY.encode("utf-8")
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid API key",

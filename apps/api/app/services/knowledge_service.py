@@ -332,8 +332,11 @@ def _delete_minio_object(storage_key: str | None) -> None:
         logger.warning("Failed to delete KB object %s: %s", storage_key, exc)
 
 
-def delete_knowledge_document(org_id: str, document_id: str) -> None:
-    """Remove Chroma vectors and MinIO object, then delete the Mongo row."""
+def delete_knowledge_document(org_id: str, document_id: str) -> str | None:
+    """Remove Chroma vectors and MinIO object, then delete the Mongo row.
+
+    Returns the deleted document's original filename (for callers like the
+    audit log that want it without a second lookup after it's gone)."""
     existing = get_document(org_id, document_id)
     if not existing:
         raise KnowledgeDocumentNotFoundError()
@@ -347,6 +350,7 @@ def delete_knowledge_document(org_id: str, document_id: str) -> None:
     )
     if deleted.deleted_count == 0:
         raise KnowledgeDocumentNotFoundError()
+    return existing.get("original_filename")
 
 
 def upload_pdf_to_minio(org_id: str, document_id: str, filename: str, data: bytes) -> str:

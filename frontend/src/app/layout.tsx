@@ -24,11 +24,15 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
+    // Browser extensions (screen recorders, translators, password managers) add attributes to
+    // <html> and <body> before React loads, which triggers a hydration warning on every refresh.
+    // These two elements are static, so the warning is safe to suppress here.
     <html
       lang="en"
       className={`${jakarta.variable} ${ibmPlexMono.variable} h-full antialiased`}
+      suppressHydrationWarning
     >
-      <body className="min-h-full flex flex-col font-sans">{children}</body>
+      <body className="min-h-full flex flex-col font-sans" suppressHydrationWarning>{children}</body>
     </html>
   );
 }

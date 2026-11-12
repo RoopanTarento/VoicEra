@@ -20,6 +20,8 @@ from app.services.campaign.errors import (
 )
 from app.services.outbound_call_service import OutboundCallError, initiate_outbound_call
 from app.services import agent_service, phone_number_service
+from app.services.secure import gateway as secure_gateway
+from app.services.secure import security_audit
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +149,23 @@ class CampaignCallDispatcher:
                     processed_at=datetime.now(timezone.utc).isoformat(),
                 )
 
+        secure_runs = [q for q in queued_runs if (q.get("context_variables") or {}).get("contact_id")]
+        if secure_runs:
+            dialled = sum(1 for q in secure_runs if str(q["queued_run_id"]) in processed_ids)
+            security_audit.record(
+                "contact.bulk_resolve",
+                org_id=org_id,
+                actor_type="service",
+                actor_id="campaign-dispatcher",
+                outcome="success" if dialled == len(secure_runs) else "error",
+                metadata={
+                    "campaign_id": campaign_id,
+                    "batch_size": len(secure_runs),
+                    "dialled": dialled,
+                    "not_dialled": len(secure_runs) - dialled,
+                },
+            )
+
         return processed_count
 
     async def _return_unprocessed_claims(
@@ -173,9 +192,10 @@ class CampaignCallDispatcher:
         campaign_id = str(campaign["campaign_id"])
         queued_run_id = str(queued_run["queued_run_id"])
         context = dict(queued_run.get("context_variables") or {})
+        contact_id = str(context.get("contact_id") or "").strip()
         phone_number = str(context.get("phone_number") or "").strip()
-        if not phone_number:
-            raise ValueError(f"No phone number in queued run {queued_run_id}")
+        if not contact_id and not phone_number:
+            raise ValueError(f"No contact in queued run {queued_run_id}")
 
         from_number, pool_managed = await self.acquire_from_number(
             org_id, agent_id, campaign
@@ -189,21 +209,34 @@ class CampaignCallDispatcher:
                 "campaign_id": campaign_id,
                 "source_uuid": queued_run.get("source_uuid"),
                 "caller_number": from_number,
-                "called_number": phone_number,
                 "direction": "outbound",
             }
         )
+        if phone_number:
+            variables["called_number"] = phone_number
         pool_scope = self._pool_scope(agent_id)
         slot_bound = False
         call_id: str | None = None
         try:
-            result = await initiate_outbound_call(
-                org_id,
-                agent_id,
-                phone_number,
-                from_number=from_number,
-                custom_variables=variables,
-            )
+            if contact_id:
+                # VoicEra Secure: the number is resolved inside the gateway for
+                # this dial only and never touches the queue.
+                result = await secure_gateway.dial_contact(
+                    org_id,
+                    agent_id,
+                    contact_id,
+                    from_number=from_number,
+                    custom_variables=variables,
+                    initiated_by=f"campaign:{campaign_id}",
+                )
+            else:
+                result = await initiate_outbound_call(
+                    org_id,
+                    agent_id,
+                    phone_number,
+                    from_number=from_number,
+                    custom_variables=variables,
+                )
             call_id = str(result["call_id"])
             call_log_service.update_call_log(
                 call_id,

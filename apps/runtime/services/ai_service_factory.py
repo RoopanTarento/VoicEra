@@ -34,6 +34,24 @@ def _requires_stored_auth(provider: str) -> bool:
     return bool(catalog.get("secrets"))
 
 
+def _has_all_auth_fields(provider: str, blob: dict[str, Any]) -> bool:
+    """True if ``blob`` already carries every secret field this provider needs.
+
+    Real stored Agents documents never contain secrets (agent_config_validation
+    forbids it), so this is always False for them — existing behavior is
+    unchanged. It only matters for a caller that pre-resolves credentials
+    in-process (e.g. the Copilot voice session bundle, which can see a
+    platform-wide fallback key apps/runtime has no other way to learn about)
+    and embeds them directly, so the redundant HTTP fetch below is skipped
+    instead of overwriting/failing on a provider with no *stored* ProviderAuth.
+    """
+    catalog = provider_level_auth(provider)
+    secrets = set((catalog or {}).get("secrets") or [])
+    if not secrets:
+        return False
+    return all(blob.get(name) not in (None, "") for name in secrets)
+
+
 async def merge_models_with_auth(
     agent: dict[str, Any],
     client: BackendClient | None = None,
@@ -57,7 +75,7 @@ async def merge_models_with_auth(
         provider = _provider_id(blob)
         if not provider:
             raise ServiceBuildError(f"{kind}.provider is required")
-        if _requires_stored_auth(provider):
+        if _requires_stored_auth(provider) and not _has_all_auth_fields(provider, blob):
             auth = await client.get_provider_auth(provider, org_id)
             merged = {**blob, **auth}
             logger.info(

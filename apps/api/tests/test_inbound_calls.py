@@ -159,7 +159,9 @@ def test_register_inbound_call_happy_path(
     assert body["call_type"] == "inbound"
     assert body["status"] == "in_progress"
     assert body["provider_call_sid"] == "inbound-sid-1"
-    assert body["from_number"] == "+15551234567"
+    # VoicEra Secure: the caller's number is stored and returned masked;
+    # the agent's own DID (to_number) stays visible.
+    assert body["from_number"] == "+1 ******4567"
     assert body["to_number"] == "+15559876543"
     assert len(_CALL_STORE) == 1
     stored = next(iter(_CALL_STORE.values()))
@@ -220,7 +222,7 @@ def test_register_inbound_call_backfills_unknown_from_number(
         },
     )
     assert second.status_code == 201
-    assert second.json()["from_number"] == "+15551234567"
+    assert second.json()["from_number"] == "+1 ******4567"
     assert second.json()["to_number"] == "+15559876543"
 
 

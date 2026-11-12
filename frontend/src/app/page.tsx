@@ -8,7 +8,7 @@ import { AuthHero } from "@/components/auth/AuthHero";
 import { PasswordInput } from "@/components/ui/Field";
 import { Spinner } from "@/components/ui/Spinner";
 import { login } from "@/lib/api-client";
-import { saveSession } from "@/lib/auth-storage";
+import { DEMO_TOKEN, saveSession } from "@/lib/auth-storage";
 import { markWalkthroughPending } from "@/components/walkthrough";
 
 export default function SignInPage() {
@@ -31,7 +31,7 @@ export default function SignInPage() {
       }
       saveSession({
         accessToken: data.access_token,
-        email,
+        email: email.trim().toLowerCase(),
         orgId: data.org_id,
         role: data.role,
       });
@@ -41,6 +41,19 @@ export default function SignInPage() {
       setError(err instanceof Error ? err.message : "Couldn't reach the server. Try again.");
       setSigningIn(false);
     }
+  }
+
+  // Dev-only: lets the UI be explored when no backend is running. The demo
+  // token is never sent to any server (see lib/api/http.ts).
+  function enterDemo() {
+    saveSession({
+      accessToken: DEMO_TOKEN,
+      email: "demo@localhost",
+      orgId: "demo",
+      orgName: "Demo workspace (local)",
+      role: "admin",
+    });
+    router.push("/agent-builder");
   }
 
   return (
@@ -120,6 +133,21 @@ export default function SignInPage() {
               {signingIn ? "Signing in" : "Sign in"}
             </button>
           </form>
+
+          {process.env.NODE_ENV !== "production" ? (
+            <div className="flex flex-col gap-2 border-t border-v-line pt-5">
+              <button
+                type="button"
+                onClick={enterDemo}
+                className="w-full cursor-pointer rounded-v-sm border border-v-line-strong bg-transparent px-4.5 py-3 text-[14px] font-medium text-v-fg transition-colors hover:border-v-accent hover:text-v-accent"
+              >
+                Continue in demo mode
+              </button>
+              <p className="m-0 text-center text-xs text-v-muted">
+                Local only, no backend. You can browse the screens; nothing is saved and Copilot won&rsquo;t reply.
+              </p>
+            </div>
+          ) : null}
 
           <p className="text-center text-xs text-v-muted">
             Don&rsquo;t have an account?{" "}

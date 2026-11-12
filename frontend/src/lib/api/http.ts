@@ -1,4 +1,4 @@
-import { clearSession, getAccessToken } from "@/lib/auth-storage";
+import { clearSession, DEMO_MESSAGE, getAccessToken, isDemoToken } from "@/lib/auth-storage";
 
 // Same-origin by default: Next rewrites /api/v1 → the API (see next.config.ts).
 // Override only if the browser must call the API on a different host.
@@ -41,6 +41,7 @@ export async function apiFetch<T>(
   }
   if (auth) {
     const token = getAccessToken();
+    if (isDemoToken(token)) throw new ApiError(DEMO_MESSAGE, 503);
     if (token) headers.set("Authorization", `Bearer ${token}`);
   }
 
@@ -73,6 +74,7 @@ export async function apiFetch<T>(
 export async function apiFetchBlob(path: string, options: RequestInit = {}): Promise<Blob> {
   const headers = new Headers(options.headers);
   const token = getAccessToken();
+  if (isDemoToken(token)) throw new ApiError(DEMO_MESSAGE, 503);
   if (token) headers.set("Authorization", `Bearer ${token}`);
 
   const res = await fetch(`${API_BASE}${path}`, { ...options, headers, cache: "no-store" });

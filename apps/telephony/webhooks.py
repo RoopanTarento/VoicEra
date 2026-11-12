@@ -130,6 +130,31 @@ def parse_webhook_form(form_dict: Mapping[str, Any]) -> TelephonyWebhookEvent:
     )
 
 
+_NUMBER_FIELDS = frozenset(
+    {"from", "to", "caller", "callerid", "caller_id", "called", "forwardedfrom", "from_number", "to_number"}
+)
+
+
+def sanitize_webhook_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Copy of a provider callback with caller / callee numbers masked.
+
+    Applied before a callback is logged or forwarded into VoicEra-facing
+    systems when the numbers are not needed (outbound calls are correlated by
+    ``call_id``). Any other phone-like value is redacted as well.
+    """
+    from apps.pii import mask_phone, redact_text
+
+    out: dict[str, Any] = {}
+    for key, value in payload.items():
+        if str(key).replace("-", "").lower() in _NUMBER_FIELDS and value:
+            out[key] = mask_phone(value)
+        elif isinstance(value, str):
+            out[key] = redact_text(value)
+        else:
+            out[key] = value
+    return out
+
+
 def is_hangup_event(event: str | None) -> bool:
     """Return True when the webhook event indicates call hangup."""
     if not event:

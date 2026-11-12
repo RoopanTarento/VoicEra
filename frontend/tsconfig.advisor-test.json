@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "outDir": ".advisor-test",
+    "rootDir": "src/lib/adopt",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "types": ["node"]
+  },
+  "include": ["src/lib/adopt/icp.ts", "src/lib/adopt/types.ts", "src/lib/adopt/advisor/**/*.ts"]
+}

@@ -17,8 +17,21 @@ export function nameFromEmail(email: string): string {
     .join(" ");
 }
 
-/** Display label for org membership roles (super_admin → "Super Admin"). */
+/** Display label for org membership roles (super_admin → "Super admin", member → "Viewer"). */
+const ROLE_LABELS: Record<string, string> = {
+  super_admin: "Super admin",
+  admin: "Admin",
+  campaign_manager: "Campaign manager",
+  member: "Viewer",
+  // Retired roles: these people now have Viewer access.
+  agent_builder: "Viewer",
+  analyst: "Viewer",
+  auditor: "Viewer",
+};
+
+/** Display label for an organisation role (matches GET /rbac/roles). */
 export function formatUserRole(role: string): string {
+  if (ROLE_LABELS[role]) return ROLE_LABELS[role]!;
   return role
     .split("_")
     .map((w) => w[0]!.toUpperCase() + w.slice(1))
@@ -82,8 +95,15 @@ function splitCallingCode(digits: string): [string, string] {
  * *****93" — keeps the calling code and last two digits, hides the rest. */
 export function maskPhoneNumber(raw: string | null | undefined): string {
   if (!raw || raw === "-" || raw === "–") return "–";
+  // Already masked upstream (the API masks contact numbers): show as-is.
+  if (raw.includes("*")) return raw;
   const m = /^\+(\d+)$/.exec(raw.trim().replace(/\s+/g, ""));
-  if (!m) return raw;
+  if (!m) {
+    // Not E.164 (e.g. "09876543210", "98765-43210"): mask the digits rather
+    // than echo the raw value.
+    const digits = raw.replace(/\D/g, "");
+    return digits.length >= 4 ? `*****${digits.slice(-2)}` : "–";
+  }
   const [callingCode, national] = splitCallingCode(m[1]!);
   if (national.length <= 2) return `+${callingCode} ${national}`;
   return `+${callingCode}\u00A0*****${national.slice(-2)}`;

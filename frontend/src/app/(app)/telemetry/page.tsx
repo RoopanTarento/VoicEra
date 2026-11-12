@@ -4,6 +4,7 @@ import { Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { Telemetry } from "@/components/dashboard/Telemetry";
 import { useToast } from "@/components/ui/useToast";
+import { RequirePermission } from "@/components/PermissionsProvider";
 
 function TelemetryPageInner() {
   const { notify, toastNode } = useToast();
@@ -21,9 +22,11 @@ function TelemetryPageInner() {
 export default function TelemetryPage() {
   return (
     <main className="flex w-full flex-col gap-6">
-      <Suspense fallback={null}>
-        <TelemetryPageInner />
-      </Suspense>
+      <RequirePermission permission="telemetry:read" what="view call telemetry">
+        <Suspense fallback={null}>
+          <TelemetryPageInner />
+        </Suspense>
+      </RequirePermission>
     </main>
   );
 }
