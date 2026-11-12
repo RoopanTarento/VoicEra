@@ -1,160 +1,151 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { Input, Select } from "@/components/ui/Field";
-import { Button } from "@/components/ui/Button";
-import { AgentTemplate, TEMPLATES, TPL_CATS } from "@/lib/wizard-data";
+import { useRouter } from "next/navigation";
+import {
+  Bot,
+  ClipboardPen,
+  Compass,
+  HandCoins,
+  LifeBuoy,
+  Megaphone,
+  MessageSquareText,
+  type LucideIcon,
+} from "lucide-react";
+import { Tooltip } from "@/components/ui/Tooltip";
+import { useUseCaseCatalogue } from "@/hooks/useUseCaseCatalogue";
+import type { AgentUseCase, SchemeIntent } from "@/lib/api-types";
+import { schemeLimitLabel, type IntentInfo } from "@/lib/api/use-cases";
+
+// Icons and fallback text for the six scheme agents; names, descriptions and
+// scheme limits come from the catalogue once it has loaded.
+const INTENT_CARDS: Record<SchemeIntent, { icon: LucideIcon; fallback: Pick<IntentInfo, "name" | "description" | "max_schemes"> }> = {
+  awareness: {
+    icon: Megaphone,
+    fallback: { name: "Awareness", description: "Tell people a scheme exists and what it gives, in under a minute.", max_schemes: 3 },
+  },
+  discovery: {
+    icon: Compass,
+    fallback: { name: "Discovery", description: "Ask a few questions to find which schemes may fit the family, and how to apply.", max_schemes: null },
+  },
+  enrolment: {
+    icon: ClipboardPen,
+    fallback: { name: "Enrolment", description: "Help people who may be eligible apply or register, step by step.", max_schemes: 1 },
+  },
+  utilisation: {
+    icon: HandCoins,
+    fallback: { name: "Utilisation", description: "Make sure people already in the scheme know how to actually get the benefit.", max_schemes: 1 },
+  },
+  support: {
+    icon: LifeBuoy,
+    fallback: { name: "Support", description: "Check whether people in the scheme have had a problem, and send it to the right channel.", max_schemes: 1 },
+  },
+  feedback: {
+    icon: MessageSquareText,
+    fallback: { name: "Feedback", description: "A two-minute survey on whether the benefit reached people and how the process felt.", max_schemes: 1 },
+  },
+};
+
+const ORDER: SchemeIntent[] = ["awareness", "discovery", "enrolment", "utilisation", "support", "feedback"];
+
+/** The six scheme agents as cards: clickable in the wizard, a plain
+ * explanation (no onPick) on the first-time home screen. */
+export function IntentCards({ onPick }: { onPick?: (intent: SchemeIntent) => void }) {
+  const { catalogue } = useUseCaseCatalogue();
+  return (
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      {ORDER.map((id) => {
+        const { icon: Icon, fallback } = INTENT_CARDS[id];
+        const info = catalogue?.intents.find((i) => i.id === id) ?? fallback;
+        const body = (
+          <>
+            <span className="flex h-9 w-9 items-center justify-center rounded-full bg-v-accent text-white transition-transform group-hover:scale-105">
+              <Icon className="size-[18px]" strokeWidth={1.8} />
+            </span>
+            <span className="flex flex-1 flex-col gap-1">
+              <span className="text-[16px] font-semibold tracking-tight">{info.name}</span>
+              <span className="text-[12.5px] font-light leading-relaxed text-v-muted">{info.description}</span>
+            </span>
+            <span className="font-mono text-[10px] uppercase tracking-[.1em] text-v-accent">
+              {schemeLimitLabel(info.max_schemes)}
+            </span>
+          </>
+        );
+        return onPick ? (
+          <button
+            key={id}
+            type="button"
+            onClick={() => onPick(id)}
+            className="group flex cursor-pointer flex-col gap-3 rounded-v-md border border-v-line bg-white p-4 text-left transition-colors hover:border-v-accent"
+          >
+            {body}
+          </button>
+        ) : (
+          <div key={id} className="flex flex-col gap-3 rounded-v-md border border-v-line bg-white p-4">
+            {body}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 interface StartStepProps {
   onStartScratch: () => void;
-  onUseTemplate: (t: AgentTemplate) => void;
+  onPickUseCase: (useCase: AgentUseCase) => void;
 }
 
-export function StartStep({ onStartScratch, onUseTemplate }: StartStepProps) {
-  const [browsing, setBrowsing] = useState(false);
-  const [query, setQuery] = useState("");
-  const [category, setCategory] = useState("All");
+export function StartStep({ onStartScratch, onPickUseCase }: StartStepProps) {
+  const router = useRouter();
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return TEMPLATES.filter((t) => {
-      const matchesCat = category === "All" || t.category === category;
-      const matchesQuery =
-        !q || t.name.toLowerCase().includes(q) || t.note.toLowerCase().includes(q);
-      return matchesCat && matchesQuery;
-    });
-  }, [query, category]);
+  return (
+    <div className="flex flex-col gap-7 animate-v-rise">
+      <div className="flex flex-col gap-2">
+        <h1 className="text-[28px] font-semibold tracking-tight">What should this agent do?</h1>
+        <p className="max-w-2xl text-sm font-light leading-relaxed text-v-muted-2">
+          Pick what the call is for and choose the scheme. VoicEra writes the agent and attaches the scheme&apos;s
+          knowledge pack. During a call, any of these agents can switch to another path if the person needs it.
+        </p>
+      </div>
 
-  if (!browsing) {
-    return (
-      <div className="flex flex-col gap-7 animate-v-rise">
-        <div className="flex flex-col gap-2">
-          <h1 className="text-[28px] font-semibold tracking-tight">
-            How would you like to begin?
-          </h1>
-          <p className="max-w-2xl text-sm font-light leading-relaxed text-v-muted-2">
-            Both paths end in the same place — an agent that answers the phone in your
-            caller&rsquo;s language.
-          </p>
-        </div>
+      <IntentCards onPick={(id) => onPickUseCase({ type: "scheme", intent: id, scheme_ids: [], survey_id: null })} />
 
-        <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
+      <div className="flex flex-col gap-3">
+        <span className="font-mono text-[10px] uppercase tracking-[.14em] text-v-muted">Or</span>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <button
             type="button"
             data-tour="start-from-scratch"
             onClick={onStartScratch}
-            className="flex cursor-pointer flex-col gap-3.5 rounded-v-md border border-v-line bg-white p-5 text-left transition-colors hover:border-v-accent"
+            className="flex cursor-pointer items-start gap-3.5 rounded-v-md border border-v-line bg-white p-4 text-left transition-colors hover:border-v-accent"
           >
-            <span className="flex h-10 w-10 items-center justify-center rounded-full bg-v-fg text-white">
-              +
-            </span>
-            <span className="flex flex-col gap-1.5">
-              <span className="text-lg font-semibold tracking-tight">Start from scratch</span>
-              <span className="text-[13.5px] font-light leading-relaxed text-v-muted">
-                Four short screens — one decision at a time, then a test call.
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-v-fg text-white">+</span>
+            <span className="flex flex-col gap-1">
+              <span className="text-[15px] font-semibold tracking-tight">Start from scratch</span>
+              <span className="text-[13px] font-light leading-relaxed text-v-muted">
+                Write your own prompt, one screen at a time.
               </span>
-            </span>
-            <span className="font-mono text-[10.5px] uppercase tracking-[.1em] text-v-muted">
-              Guided · about 3 minutes
             </span>
           </button>
 
-          <button
-            type="button"
-            onClick={() => setBrowsing(true)}
-            className="flex cursor-pointer flex-col gap-3.5 rounded-v-md border border-v-line bg-white p-5 text-left transition-colors hover:border-v-accent"
-          >
-            <span className="flex h-10 w-10 items-center justify-center rounded-full bg-v-soft text-v-fg">
-              ▦
-            </span>
-            <span className="flex flex-col gap-1.5">
-              <span className="text-lg font-semibold tracking-tight">
-                Start from a template
+          <Tooltip text="Agent Builder" className="w-full">
+            <button
+              type="button"
+              onClick={() => router.push("/agent-builder")}
+              className="group relative flex w-full cursor-pointer items-start gap-3.5 overflow-hidden rounded-v-md border border-v-line bg-white p-4 text-left transition-colors hover:border-v-accent"
+            >
+              <span className="pointer-events-none absolute inset-0 bg-gradient-to-br from-v-accent/[0.06] to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-v-soft text-v-fg">
+                <Bot className="size-[18px]" strokeWidth={1.8} />
               </span>
-              <span className="text-[13.5px] font-light leading-relaxed text-v-muted">
-                A working agent, already written. Change anything you like.
+              <span className="flex flex-col gap-1">
+                <span className="text-[15px] font-semibold tracking-tight">Agent Builder</span>
+                <span className="text-[13px] font-light leading-relaxed text-v-muted">
+                  Describe, speak, or paste instructions — VoicERA drafts an agent for you to review.
+                </span>
               </span>
-            </span>
-            <span className="font-mono text-[10.5px] uppercase tracking-[.1em] text-v-muted">
-              Fastest · about 30 seconds
-            </span>
-          </button>
+            </button>
+          </Tooltip>
         </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex flex-col gap-5 animate-v-rise">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div className="flex flex-col gap-2">
-          <Button variant="ghost" size="sm" className="w-max" onClick={() => setBrowsing(false)}>
-            ← Back
-          </Button>
-          <h1 className="text-[26px] font-semibold tracking-tight">Pick a template</h1>
-        </div>
-        <span className="font-mono text-[10px] uppercase tracking-[.14em] text-v-muted">
-          {filtered.length} templates
-        </span>
-      </div>
-
-      <div className="flex flex-wrap gap-2.5">
-        <Input
-          className="min-w-64 flex-1"
-          placeholder="Search templates"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-        <Select className="w-max" value={category} onChange={(e) => setCategory(e.target.value)}>
-          {TPL_CATS.map((c) => (
-            <option key={c} value={c}>
-              {c}
-            </option>
-          ))}
-        </Select>
-      </div>
-
-      <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2 lg:grid-cols-3">
-        {filtered.map((t) => (
-          <div
-            key={t.id}
-            className="flex h-full min-h-0 flex-col gap-3 rounded-v-md border border-v-line bg-white p-4.5"
-          >
-            <span className="flex items-start justify-between gap-2">
-              <span className="min-w-0 flex-1 line-clamp-2 text-[15px] font-semibold leading-snug tracking-tight">
-                {t.name}
-              </span>
-              <span className="shrink-0 whitespace-nowrap font-mono text-[9px] uppercase tracking-[.12em] text-v-muted">
-                by {t.by}
-              </span>
-            </span>
-            <div className="flex min-h-0 flex-1 flex-col gap-3">
-              <span className="line-clamp-2 text-xs font-light leading-relaxed text-v-muted">
-                {t.note}
-              </span>
-              <span className="line-clamp-3 border-l-2 border-v-accent pl-2.5 text-[12.5px] leading-relaxed text-v-fg">
-                {t.line}
-              </span>
-            </div>
-            <span className="mt-auto flex shrink-0 items-center justify-between gap-2 border-t border-v-line pt-3">
-              <span className="min-w-0 truncate font-mono text-[9.5px] uppercase tracking-[.1em] text-v-muted">
-                {t.category} · {t.lang}
-              </span>
-              <Button size="sm" className="shrink-0 whitespace-nowrap" onClick={() => onUseTemplate(t)}>
-                Use this
-              </Button>
-            </span>
-          </div>
-        ))}
-
-        {filtered.length === 0 ? (
-          <div className="col-span-full flex flex-col items-center gap-1.5 rounded-v-md border border-v-line bg-white p-9 text-center">
-            <span className="text-sm font-semibold">Nothing matches that</span>
-            <span className="text-xs font-light text-v-muted">
-              Try another word, or start from scratch.
-            </span>
-          </div>
-        ) : null}
       </div>
     </div>
   );

@@ -16,6 +16,12 @@ from app.services.agent_service import AgentNotFoundError
 from app.services.agent_telephony_service import AgentTelephonyError
 from app.services.outbound_call_service import OutboundCallError
 
+
+@pytest.fixture(autouse=True)
+def _member_is_super_admin(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The call routes look up the caller's role (VoicEra Secure RBAC); no Mongo here."""
+    monkeypatch.setattr("app.rbac.membership_role", lambda email, org_id: "super_admin")
+
 _CALL_STORE: dict[str, dict[str, Any]] = {}
 _AGENT_STORE: dict[tuple[str, str], dict[str, Any]] = {}
 _PHONE_STORE: dict[str, dict[str, Any]] = {}
@@ -234,7 +240,8 @@ def test_outbound_call_happy_path(
     assert body["status"] == "ringing"
     assert body["provider_call_sid"] == "provider-sid-123"
     assert body["from_number"] == "+15559876543"
-    assert body["to_number"] == "+14155551234"
+    # VoicEra Secure: the callee number is masked in the response and CallLog.
+    assert body["to_number"] == "+1 ******1234"
     assert body["custom_variables"] == {"customer_name": "Jane"}
     assert len(_CALL_STORE) == 1
     stored = next(iter(_CALL_STORE.values()))
@@ -301,7 +308,8 @@ def test_vi_outbound_does_not_create_call_log_at_dial(
     assert body["provider_call_sid"] == "vi-sid-123"
     assert body["call_id"] is None
     assert body["from_number"] == "+919876543210"
-    assert body["to_number"] == "+919999999999"
+    # The callee is masked in API responses (VoicEra Secure).
+    assert body["to_number"] == "+91 ******9999"
     assert len(_CALL_STORE) == 0
     dial_mock.assert_awaited_once()
     answer_url = dial_mock.await_args.kwargs["answer_url"]

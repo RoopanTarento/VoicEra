@@ -6,7 +6,18 @@ import os
 
 from fastapi import FastAPI
 
-from apps.runtime.routes import agent, health, plivo_telephony, telephony, vi_telephony
+from apps.pii.log_redaction import install_loguru_redaction
+from apps.runtime.routes import (
+    agent,
+    copilot_voice,
+    health,
+    plivo_telephony,
+    telephony,
+    vi_telephony,
+)
+
+# Mask phone numbers and emails in every runtime log line (VoicEra Secure).
+install_loguru_redaction()
 
 app = FastAPI(
     title="Voicera Runtime",
@@ -19,6 +30,7 @@ app.include_router(telephony.router)
 app.include_router(agent.router)
 app.include_router(vi_telephony.router)
 app.include_router(plivo_telephony.router)
+app.include_router(copilot_voice.router)
 
 
 def main() -> None:

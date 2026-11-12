@@ -159,7 +159,9 @@ def test_register_inbound_call_happy_path(
     assert body["call_type"] == "inbound"
     assert body["status"] == "in_progress"
     assert body["provider_call_sid"] == "inbound-sid-1"
-    assert body["from_number"] == "+15551234567"
+    # VoicEra Secure: the caller's number is stored and returned masked;
+    # the agent's own DID (to_number) stays visible.
+    assert body["from_number"] == "+1 ******4567"
     assert body["to_number"] == "+15559876543"
     assert len(_CALL_STORE) == 1
     stored = next(iter(_CALL_STORE.values()))
@@ -210,10 +212,11 @@ def test_register_inbound_call_normalizes_indian_numbers(
     )
     assert response.status_code == 201
     body = response.json()
-    assert body["from_number"] == "+919876543210"
+    # The caller's number is masked (VoicEra Secure); the agent's own DID stays visible.
+    assert body["from_number"] == "+91 ******3210"
     assert body["to_number"] == "+919876543211"
     stored = next(iter(_CALL_STORE.values()))
-    assert stored["from_number"] == "+919876543210"
+    assert stored["from_number"] == "+91 ******3210"
     assert stored["to_number"] == "+919876543211"
 
 
@@ -248,7 +251,7 @@ def test_register_inbound_call_backfills_unknown_from_number(
         },
     )
     assert second.status_code == 201
-    assert second.json()["from_number"] == "+15551234567"
+    assert second.json()["from_number"] == "+1 ******4567"
     assert second.json()["to_number"] == "+15559876543"
 
 

@@ -2,17 +2,26 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal, Optional
+from typing import Annotated, Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, EmailStr, Field, model_validator
 
-Role = Literal["super_admin", "admin", "member"]
+# Emails identify accounts, so they are compared case-insensitively: every
+# request email is trimmed and lower-cased before it reaches a service.
+NormalizedEmail = Annotated[EmailStr, AfterValidator(lambda v: v.strip().lower())]
+
+Role = Literal[
+    "super_admin",
+    "admin",
+    "member",
+    "campaign_manager",
+]  # keep in sync with app.rbac.ROLES (asserted in tests)
 
 
 class UserCreate(BaseModel):
     """Schema for creating a new user and organisation."""
 
-    email: EmailStr
+    email: NormalizedEmail
     password: str
     organisation_name: str
     name: Optional[str] = None
@@ -41,7 +50,7 @@ class UserResponse(BaseModel):
 class UserLogin(BaseModel):
     """Schema for user login."""
 
-    email: EmailStr
+    email: NormalizedEmail
     password: str
 
 
@@ -68,7 +77,7 @@ class SwitchOrganisationRequest(BaseModel):
 class ForgotPasswordRequest(BaseModel):
     """Schema for forgot-password request."""
 
-    email: EmailStr
+    email: NormalizedEmail
 
 
 class ResetPasswordRequest(BaseModel):
@@ -95,17 +104,40 @@ class ErrorResponse(BaseModel):
 class MemberInvite(BaseModel):
     """Invite a user into the caller's active organisation."""
 
-    email: EmailStr
+    email: NormalizedEmail
     password: str
+    role: str = Field(
+        default="member",
+        description=(
+            "Role in this organisation: admin, campaign_manager or member. "
+            "Only the Super admin can invite admins."
+        ),
+    )
+
+
+class MemberRoleUpdate(BaseModel):
+    """Change a member's role in the caller's active organisation."""
+
+    email: NormalizedEmail
+    role: str
 
 
 class MemberJoin(BaseModel):
-    """Public self-serve join into an organisation via invite link (org_id as code)."""
+    """Join an organisation by accepting an invitation (token from the invite link)."""
 
-    email: EmailStr
+    email: NormalizedEmail
     password: str
-    org_id: str
+    invite_token: Optional[str] = None
+    org_id: Optional[str] = None  # ignored; kept so older clients get a clear error
     name: Optional[str] = None
+
+
+class InvitationCreate(BaseModel):
+    """Invite someone by email with a role; optionally email them the link."""
+
+    email: NormalizedEmail
+    role: Role = "member"
+    send_email: bool = False
 
 
 class MemberListItem(BaseModel):
@@ -119,13 +151,13 @@ class MemberListItem(BaseModel):
 class AssignAdminRequest(BaseModel):
     """Promote a member to admin in the active organisation."""
 
-    email: EmailStr
+    email: NormalizedEmail
 
 
 class RemoveMemberRequest(BaseModel):
     """Remove a member from the active organisation."""
 
-    email: EmailStr
+    email: NormalizedEmail
 
 
 class CheckEmailResponse(BaseModel):
@@ -339,6 +371,29 @@ def _is_language_keyed_models(models: Any) -> bool:
     if not isinstance(models, dict) or not models or _looks_like_model_stack(models):
         return False
     return any(_looks_like_model_stack(value) for value in models.values())
+class AgentUseCase(BaseModel):
+    """What the agent is for: a scheme agent (schemes + intent) or a city survey.
+
+    ``scheme_discovery`` is how agents saved before intents were stored; it is
+    read as a ``scheme`` agent with the ``discovery`` intent.
+    """
+
+    type: Literal["scheme", "city_survey", "scheme_discovery"]
+    intent: Optional[Literal["awareness", "discovery", "enrolment", "utilisation", "support", "feedback"]] = None
+    scheme_ids: list[str] = Field(default_factory=list)
+    survey_id: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _current_shape(self) -> "AgentUseCase":
+        if self.type == "scheme_discovery":
+            self.type = "scheme"
+        if self.type == "scheme":
+            self.intent = self.intent or "discovery"
+            self.survey_id = None
+        else:
+            self.intent = None
+            self.scheme_ids = []
+        return self
 
 
 class AgentConfigPayload(BaseModel):
@@ -358,6 +413,7 @@ class AgentConfigPayload(BaseModel):
             "overridden by per-call custom_variables on outbound calls."
         ),
     )
+    use_case: Optional[AgentUseCase] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -830,6 +886,9 @@ class CallLogResponse(BaseModel):
     campaign_id: Optional[str] = None
     campaign_name: Optional[str] = None
     queued_run_id: Optional[str] = None
+    contact_id: Optional[str] = None
+    analysis: Optional[dict[str, Any]] = None
+    transcript_source: Optional[str] = None
 
 
 class CallLogListResponse(BaseModel):
@@ -1005,11 +1064,19 @@ class CampaignResponse(BaseModel):
 
 
 class CampaignCsvUploadResponse(BaseModel):
-    """Response after uploading a campaign CSV via multipart form."""
+    """Response after uploading a campaign CSV via multipart form.
 
-    source_id: str = Field(description="MinIO object key; pass as source_id on create")
+    Numbers are hashed and encrypted on arrival under the adopter's own keys;
+    the file itself is not stored. Pass ``source_id`` and ``source_type`` to
+    ``POST /campaign/create``.
+    """
+
+    source_id: str = Field(description="Contact set ID; pass as source_id on create")
+    source_type: str = Field(default="secure_contacts", description="Pass as source_type on create")
     filename: str
     contact_rows: int = Field(description="Number of data rows with a phone_number")
+    new_contacts: int = Field(default=0, description="Numbers protected for the first time")
+    protected: bool = Field(default=True, description="True: numbers were hashed and encrypted, not stored raw")
 
 
 class CampaignProgressResponse(BaseModel):
@@ -1025,7 +1092,13 @@ class CampaignProgressResponse(BaseModel):
 
 
 class CampaignAnalyticsResponse(BaseModel):
-    """Campaign progress + CallLogs analytics (see ``get_call_analytics``)."""
+    """Campaign progress + CallLogs analytics (see ``get_call_analytics``).
+
+    Extra keys carry the post-campaign results from
+    ``call_analysis.campaign_analytics`` (outcomes, sentiment, survey, issues).
+    """
+
+    model_config = ConfigDict(extra="allow")
 
     campaign_id: str
     state: CampaignState
@@ -1166,3 +1239,189 @@ class KnowledgeRetrieveResponse(BaseModel):
     """RAG retrieval response."""
 
     chunks: list[KnowledgeChunkResponse] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Copilot
+# ---------------------------------------------------------------------------
+
+
+class CopilotContext(BaseModel):
+    """Optional current-page context the frontend supplies for grounding.
+
+    Purely a hint for the system prompt (e.g. "the user is viewing agent X");
+    it is never trusted for authorization — org scoping always comes from the
+    JWT, not from client-supplied context.
+    """
+
+    route: Optional[str] = None
+    agent_id: Optional[str] = None
+    call_id: Optional[str] = None
+    campaign_id: Optional[str] = None
+
+
+class CopilotChatHistoryMessage(BaseModel):
+    """One prior turn, supplied by the client for an ephemeral (unsaved) chat."""
+
+    role: str
+    content: str
+
+
+class CopilotAttachmentRef(BaseModel):
+    """A reference to an already-uploaded image, attached to one message."""
+
+    attachment_id: str
+    content_type: str
+    original_filename: str
+
+
+class CopilotAttachmentUploadResponse(CopilotAttachmentRef):
+    """Response for a successful attachment upload."""
+
+
+class CopilotChatRequest(BaseModel):
+    """One turn sent to the Copilot."""
+
+    message: str = Field(min_length=1, max_length=4000)
+    conversation_id: Optional[str] = None
+    context: Optional[CopilotContext] = None
+    ephemeral: bool = False
+    history: list[CopilotChatHistoryMessage] = Field(default_factory=list)
+    attachment_ids: list[str] = Field(default_factory=list, max_length=4)
+
+
+class CopilotImprovePromptRequest(BaseModel):
+    """Raw, possibly typo-ridden text the user wants cleaned up before sending."""
+
+    text: str = Field(min_length=1, max_length=4000)
+
+
+class CopilotImprovePromptResponse(BaseModel):
+    """The corrected text — same meaning/intent/language, fixed spelling and grammar."""
+
+    improved: str
+
+
+class CopilotToolCallRecord(BaseModel):
+    """Record of one tool invocation made while answering a turn."""
+
+    tool: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    ok: bool = True
+    summary: Optional[str] = None
+
+
+class CopilotMessage(BaseModel):
+    """One stored message in a Copilot conversation."""
+
+    role: Literal["user", "assistant"]
+    content: str
+    created_at: str
+    tool_calls: list[CopilotToolCallRecord] = Field(default_factory=list)
+    attachments: list[CopilotAttachmentRef] = Field(default_factory=list)
+
+
+class CopilotConversationSummary(BaseModel):
+    """List-view row for a Copilot conversation."""
+
+    conversation_id: str
+    title: str
+    created_at: str
+    updated_at: str
+
+
+class CopilotConversationDetail(BaseModel):
+    """Full Copilot conversation with messages."""
+
+    conversation_id: str
+    org_id: str
+    title: str
+    messages: list[CopilotMessage] = Field(default_factory=list)
+    created_at: str
+    updated_at: str
+
+
+class CopilotConversationDeleteResponse(BaseModel):
+    """Response after deleting a Copilot conversation."""
+
+    deleted: bool = True
+
+
+class CopilotConversationTruncateRequest(BaseModel):
+    """Drop every stored message from keep_count onward (editing a past message)."""
+
+    keep_count: int = Field(ge=0)
+
+
+class CopilotConversationTruncateResponse(BaseModel):
+    """Response after truncating a Copilot conversation."""
+
+    truncated: bool = True
+
+
+class CopilotAgentDraftConfirmResponse(BaseModel):
+    """Response after a user confirms a Copilot-proposed agent draft."""
+
+    agent_id: str
+    name: str
+    status: AgentStatus
+
+
+class CopilotAgentDraftDismissResponse(BaseModel):
+    """Response after a user dismisses a Copilot-proposed agent draft."""
+
+    dismissed: bool = True
+
+
+class CopilotCampaignDraftConfirmResponse(BaseModel):
+    """Response after a user confirms a Copilot-proposed campaign draft."""
+
+    campaign_id: str
+    name: str
+    state: str
+
+
+# ---------------------------------------------------------------------------
+# Copilot voice mode
+# ---------------------------------------------------------------------------
+
+
+class CopilotVoiceSessionCreateResponse(BaseModel):
+    """Returned to the browser so it can open the runtime voice WebSocket."""
+
+    session_id: str
+    ws_path: str
+    conversation_id: Optional[str] = None
+
+
+class CopilotVoiceSessionBundle(BaseModel):
+    """Everything apps/runtime needs to build a Copilot voice Pipecat pipeline.
+
+    Internal-only (verify_api_key) — never exposed to the browser. ``agent``
+    is a synthetic, agent-shaped dict (never a real Agents document) built by
+    voice.build_copilot_voice_agent, valid input to the exact same
+    apps.runtime.services.pipecat.pipeline.run_pipeline() every real
+    telephony/browser agent call already uses.
+    """
+
+    org_id: str
+    created_by: str
+    role: str
+    conversation_id: Optional[str] = None
+    agent: dict[str, Any]
+    tool_names: list[str]
+
+
+class CopilotVoiceToolExecuteRequest(BaseModel):
+    tool: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+
+
+class CopilotVoiceToolExecuteResponse(BaseModel):
+    ok: bool
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
+class CopilotVoiceTurnRequest(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=8000)

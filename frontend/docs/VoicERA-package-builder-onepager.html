@@ -1,0 +1,103 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>VoicERA package builder: one-pager</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+@page {size:A4;margin:0} *{box-sizing:border-box} html{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+body{margin:0;font-family:'Plus Jakarta Sans',-apple-system,'Helvetica Neue',Arial,sans-serif;color:#14161a;font-size:8.6pt;line-height:1.38;background:#fff}
+.page{width:210mm;height:297mm;padding:11mm 12mm 8mm;background:#fbfaf7;position:relative;overflow:hidden}
+.eyebrow{font-family:'IBM Plex Mono',Menlo,monospace;font-size:6.6pt;letter-spacing:.16em;text-transform:uppercase;color:#6b7280}
+h1{font-size:19pt;line-height:1.1;margin:1.6mm 0 1mm;letter-spacing:-.02em;font-weight:700} h1 em{font-style:normal;color:#1f4ee8}
+.lead{font-size:9.4pt;color:#4c5460;margin:0 0 3.2mm;max-width:165mm}
+h2{font-size:10pt;margin:0 0 1.6mm;font-weight:700;letter-spacing:-.01em}
+.tools{display:grid;grid-template-columns:repeat(4,1fr);gap:2.4mm;margin-bottom:3.6mm}
+.tool{background:#fff;border:.3mm solid #e8e4dc;border-radius:2.2mm;padding:2.4mm 2.6mm;position:relative;display:flex;flex-direction:column}
+.tool .tag{font-family:'IBM Plex Mono',Menlo,monospace;font-size:5.4pt;letter-spacing:.08em;text-transform:uppercase;color:#1740c4;background:#eef1fe;border-radius:.8mm;padding:.4mm 1.2mm;align-self:flex-start;margin-bottom:1.2mm}
+.tool b{font-size:9.6pt;letter-spacing:-.01em} .tool i{font-style:normal;font-family:'IBM Plex Mono',Menlo,monospace;font-size:6.4pt;color:#6b7280;margin:.3mm 0 .8mm}
+.tool em{font-style:normal;font-size:7.8pt;font-weight:600;color:#14161a;margin-bottom:1mm}
+.tool ul{margin:0;padding-left:3.2mm;color:#4c5460;font-size:7.5pt;display:flex;flex-direction:column;gap:.7mm}
+.flow{display:grid;grid-template-columns:1fr auto 1.25fr auto 1fr;gap:2mm;align-items:stretch;margin-bottom:3.6mm}
+.fb{background:#fff;border:.3mm solid #e8e4dc;border-radius:2.2mm;padding:2.2mm 2.6mm;font-size:7.7pt;color:#4c5460}
+.fb b{display:block;color:#14161a;font-size:8.4pt;margin-bottom:.6mm}
+.fb.core{background:#14161a;border-color:#14161a;color:#d5d9e0} .fb.core b{color:#fff}
+.arr{display:flex;align-items:center;color:#8a8577;font-size:11pt}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:4.5mm;margin-bottom:3.4mm}
+ul.p{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:1.15mm}
+ul.p li{display:flex;gap:1.8mm;font-size:7.9pt;color:#4c5460} ul.p li::before{content:'';flex:0 0 1.3mm;height:1.3mm;border-radius:50%;background:#1f4ee8;margin-top:1.25mm}
+ul.p li b{color:#14161a;font-weight:600}
+ul.n li::before{background:#d98324}
+.stats{display:grid;grid-template-columns:repeat(5,1fr);gap:2mm;margin-bottom:3.4mm}
+.st{background:#fff;border:.3mm solid #e8e4dc;border-radius:2mm;padding:1.8mm 2.2mm} .st i{display:block;font-style:normal;font-size:12.5pt;font-weight:700;letter-spacing:-.02em;line-height:1.1} .st span{font-size:6.6pt;color:#4c5460;display:block;line-height:1.25;margin-top:.4mm}
+.try{background:#eef1fe;border:.3mm solid #dde4fc;border-radius:2.2mm;padding:2.4mm 3mm;margin-bottom:2.6mm}
+.try h2{color:#1740c4;margin-bottom:1mm} .try ol{margin:0;padding-left:4mm;color:#4c5460;font-size:7.9pt;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:repeat(3,auto);grid-auto-flow:column;gap:.8mm 6mm} .try ol li b{color:#14161a;font-weight:600}
+code{font-family:'IBM Plex Mono',Menlo,monospace;font-size:7pt;background:#fff;border:.25mm solid #e8e4dc;border-radius:.8mm;padding:.2mm 1mm;color:#14161a}
+.foot{position:absolute;left:12mm;right:12mm;bottom:5mm;display:flex;justify-content:space-between;font-size:6.2pt;color:#8a8577;font-family:'IBM Plex Mono',Menlo,monospace;letter-spacing:.05em}
+</style></head><body><section class="page">
+<div class="eyebrow">VoicERA for government · Package builder experience · One-pager</div>
+<h1>Describe it. <em>Build it.</em> See if it fits.</h1>
+<p class="lead">A set of connected screens that help a government department work out, without a meeting, whether the VoicEra Fully Loaded (Platinum) package fits its idea, what it costs, and what to bring. Four ways in, one rules engine underneath.</p>
+
+<h2>The four ways in</h2>
+<div class="tools"><div class="tool"><span class="tag">Best first stop</span><b>Composer</b><i>/compose</i><em>Build the call from blocks</em><ul><li>Drag or click blocks onto a live call</li><li>Add something the package cannot do and it turns red, names the block, offers Remove</li><li>No questions to answer</li></ul></div><div class="tool"><span class="tag">If you prefer talking</span><b>Studio</b><i>/studio</i><em>Describe it, get a blueprint</em><ul><li>Say it in one sentence</li><li>Asks only what could change the answer</li><li>Draws the call live; shows what would make it fit</li></ul></div><div class="tool"><span class="tag">For the formal write-up</span><b>Package advisor</b><i>/adopt/advisor</i><em>Guided questions to a full report</em><ul><li>Adaptive questions, 14 checks</li><li>Recommendation, checklist, plan, cost, FAQ</li><li>Exports as Markdown and CSV</li></ul></div><div class="tool"><span class="tag">For scheme discovery</span><b>Scheme Discovery PoC</b><i>/adopt/advisor/poc</i><em>Build a working proof of concept</em><ul><li>Enter schemes once</li><li>Get a script and knowledge files inside the limits</li><li>Play the conversation; download a zip</li></ul></div></div>
+
+<h2>How it works underneath</h2>
+<div class="flow">
+ <div class="fb"><b>What you give it</b>Blocks, one sentence, or answers. Anything you do not say stays <i>unknown</i>, never assumed.</div>
+ <div class="arr">→</div>
+ <div class="fb core"><b>One rules engine</b>14 checks against the package document: use case, direction, call length, languages, knowledge base, telephony, integration, capacity, campaigns, hosting, data, cost, readiness, open items.</div>
+ <div class="arr">→</div>
+ <div class="fb"><b>What you get back</b>One of four verdicts, the reason, what to remove, a checklist, a plan, a cost, and exports.</div>
+</div>
+
+<div class="cols">
+ <div>
+  <h2>What the adopter gets</h2>
+  <ul class="p">
+   <li><span><b>A straight answer:</b> suitable, suitable with conditions, needs review, or outside scope. It never forces a yes.</span></li>
+   <li><span><b>The reason, with a source</b> for every limit: 500 calls, 3 minutes, 10 files of 5 MB, 11 languages.</span></li>
+   <li><span><b>What would make it fit</b> when it does not, re-checked by the same rules.</span></li>
+   <li><span><b>What to bring:</b> script, knowledge base, phone list, permission, test callers, approvals.</span></li>
+   <li><span><b>A cost from documented rates:</b> ₹50,000 setup, ₹500 a number, ₹0.50 a minute. Proprietary pricing stays "not supplied".</span></li>
+   <li><span><b>Something to hear and download:</b> a conversation to play, a script, knowledge files, a zip.</span></li>
+  </ul>
+ </div>
+ <div>
+  <h2>What is real, what is a demo</h2>
+  <ul class="p">
+   <li><span><b>Real:</b> the rules, the limits, the prices, the checklist logic and the exports. They run in your browser.</span></li>
+   <li><span><b>Demo:</b> the conversation is a text simulation. No speech, model or telephony, and nobody is called.</span></li>
+   <li><span><b>Rule-based reading:</b> one-sentence input uses keyword rules. No AI service is connected.</span></li>
+   <li><span><b>Nothing is sent:</b> "request an implementation discussion" only prepares text on your device.</span></li>
+   <li><span><b>Saved locally:</b> answers stay in this browser only.</span></li>
+  </ul>
+  <h2 style="margin-top:2.4mm">Still open in the package document</h2>
+  <ul class="p n">
+   <li><span>Where call data is stored, whether it trains models, how long it is kept</span></li>
+   <li><span>The actual model list and quality, and proprietary-model pricing</span></li>
+  </ul>
+ </div>
+</div>
+
+<div class="stats">
+ <div class="st"><i>4</i><span>ways in, one engine</span></div>
+ <div class="st"><i>14</i><span>checks per verdict</span></div>
+ <div class="st"><i>93</i><span>automated tests passing</span></div>
+ <div class="st"><i>10</i><span>required scenarios covered</span></div>
+ <div class="st"><i>2 sizes</i><span>checked: desktop and phone</span></div>
+</div>
+
+<div class="try">
+ <h2>Try it in two minutes</h2>
+ <ol>
+  <li><b>Open the Composer.</b> Pick "Scheme helpline".</li>
+  <li><b>Drag in "Check a citizen's record".</b> Watch it turn red.</li>
+  <li><b>Click "Remove it".</b> The verdict recovers.</li>
+  <li><b>Open "Hear it".</b> Play the conversation.</li>
+  <li><b>Open the full recommendation.</b> See the report and cost.</li>
+  <li><b>Want the proof of concept?</b> Use the Scheme Discovery builder.</li>
+ </ol>
+</div>
+<ul class="p" style="margin-bottom:1mm">
+ <li><span><b>Run it:</b> <code>cd frontend &amp;&amp; npm run dev</code>, then open <code>localhost:3000/adopt/all</code> for every screen. <b>Test it:</b> <code>npm run test:advisor</code>. Existing screens (discover, workspace, 11-step path) are unchanged.</span></li>
+</ul>
+<div class="foot"><span>VOICERA · PACKAGE BUILDER · ONE-PAGER</span><span>Sources: Platinum package document · ICP 6 Oct 2026</span></div>
+</section></body></html>

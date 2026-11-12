@@ -10,6 +10,7 @@ from typing import Any
 from app.services import agent_service, call_log_service
 from app.services.agent_service import AgentNotFoundError
 from apps.telephony.phone_format import format_e164_for_call_log
+from apps.pii import mask_phone
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +83,9 @@ def register_inbound_call(
         to_number,
         linked_phone_number=str(agent.get("linked_phone_number") or ""),
     )
+    # The caller's number is contact PII: keep only its masked form. The
+    # agent's own DID (``to_number``) is a business number and stays as-is.
+    resolved_from = mask_phone(resolved_from)
 
     existing = call_log_service.get_call_log_by_provider_sid(org_id, sid)
     if existing:

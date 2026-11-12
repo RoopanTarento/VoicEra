@@ -7,7 +7,8 @@
     "dev": "next dev",
     "build": "next build --webpack",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:advisor": "tsc -p tsconfig.advisor-test.json && node --test .advisor-test/advisor/tests/*.test.js"
   },
   "dependencies": {
     "@pipecat-ai/client-js": "^1.13.1",
@@ -18,10 +19,13 @@
     "jspdf": "^4.2.1",
     "jszip": "^3.10.1",
     "lucide-react": "^1.35.0",
+    "mermaid": "^12.0.0",
     "next": "16.3.3",
     "react": "19.2.8",
     "react-dom": "19.2.8",
+    "react-markdown": "^10.1.0",
     "recharts": "^3.10.1",
+    "remark-gfm": "^4.0.1",
     "topojson-client": "^3.1.0"
   },
   "devDependencies": {

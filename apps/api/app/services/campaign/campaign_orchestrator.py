@@ -347,5 +347,8 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    from apps.pii.log_redaction import install_logging_redaction
+
     logging.basicConfig(level=logging.INFO)
+    install_logging_redaction()
     asyncio.run(main())

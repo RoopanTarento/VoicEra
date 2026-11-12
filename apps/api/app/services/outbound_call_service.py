@@ -17,6 +17,7 @@ from app.services.agent_telephony_service import (
     load_telephony_client,
 )
 from app.services.phone_number_service import PhoneNumberNotFoundError
+from apps.pii import mask_phone, redact_text, scrub_mapping
 from apps.telephony import initiate_outbound
 from apps.telephony.phone_format import format_e164_for_call_log
 from apps.telephony.registry import defers_call_log_to_stream
@@ -42,14 +43,10 @@ def _now_iso() -> str:
 
 def _normalize_phone(number: str, *, field: str) -> str:
     cleaned = format_e164_for_call_log(number or "")
-    if not cleaned or cleaned.lower() == "unknown":
+    if not cleaned or cleaned.lower() == "unknown" or not _PHONE_RE.match(cleaned):
+        # Never echo the rejected value: it may be a real contact number.
         raise OutboundCallError(
-            f"Invalid {field}: {number!r}. Expected E.164-style digits (7–15).",
-            status_code=422,
-        )
-    if not _PHONE_RE.match(cleaned):
-        raise OutboundCallError(
-            f"Invalid {field}: {number!r}. Expected E.164-style digits (7–15).",
+            f"Invalid {field}. Expected E.164-style digits (7–15).",
             status_code=422,
         )
     return cleaned
@@ -134,11 +131,18 @@ async def initiate_outbound_call(
     *,
     from_number: str | None = None,
     custom_variables: dict[str, Any] | None = None,
+    contact_id: str | None = None,
 ) -> dict[str, Any]:
     """Validate agent and place an outbound call.
 
     Most providers create a CallLog at dial time. VI defers CallLog creation
     until the media WebSocket connects (see :func:`register_outbound_call`).
+
+    The destination is the callee's real number and is used only for the
+    provider dial request. The CallLog stores it masked (plus ``contact_id``
+    when the call came from the VoicEra Secure vault), and custom variables
+    are scrubbed of phone numbers before they are stored or handed to the
+    voice runtime.
     """
     try:
         agent = agent_service.get_agent(org_id, agent_id)
@@ -150,7 +154,8 @@ async def initiate_outbound_call(
     normalized_from = _resolve_from_number(
         org_id, agent_id, agent, from_number, provider=provider
     )
-    variables = dict(custom_variables or {})
+    masked_to = mask_phone(normalized_to)
+    variables = scrub_mapping(custom_variables)
     defer_log = defers_call_log_to_stream(provider)
 
     call_id: str | None = None
@@ -167,7 +172,8 @@ async def initiate_outbound_call(
             "status": "initiated",
             "call_response": "pending",
             "from_number": normalized_from,
-            "to_number": normalized_to,
+            "to_number": masked_to,
+            "contact_id": contact_id,
             "telephony_provider": provider,
             "custom_variables": variables,
             "created_at": now,
@@ -206,16 +212,16 @@ async def initiate_outbound_call(
             **credentials,
         )
     except ValueError as exc:
-        message = str(exc)
+        message = redact_text(str(exc))
         _mark_call_failed(call_id, message)
         raise OutboundCallError(message, status_code=502) from exc
     except Exception as exc:
-        message = str(exc) or "Telephony dial failed"
+        message = redact_text(str(exc)) or "Telephony dial failed"
         _mark_call_failed(call_id, message)
         raise OutboundCallError(message, status_code=502) from exc
 
     if result.get("status") != "success":
-        message = str(result.get("message") or "Telephony dial failed")
+        message = redact_text(str(result.get("message") or "Telephony dial failed"))
         _mark_call_failed(call_id, message)
         raise OutboundCallError(message, status_code=502)
 
@@ -240,7 +246,8 @@ async def initiate_outbound_call(
         "status": status,
         "provider_call_sid": provider_call_sid,
         "from_number": normalized_from,
-        "to_number": normalized_to,
+        "to_number": masked_to,
+        "contact_id": contact_id,
         "agent_id": agent_id,
         "custom_variables": variables,
     }
@@ -257,9 +264,13 @@ def _resolve_outbound_register_numbers(
     from_number: str,
     to_number: str,
 ) -> tuple[str, str]:
-    """Canonicalize outbound CLI/DNI for CallLog storage (E.164)."""
+    """Canonicalize outbound CLI/DNI for CallLog storage (E.164).
+
+    VoicEra Secure: the callee (``to_number``) is contact PII, so only its
+    masked form is stored. The caller ID is the business's own number.
+    """
     resolved_from = format_e164_for_call_log(from_number or "unknown")
-    resolved_to = format_e164_for_call_log(to_number or "unknown")
+    resolved_to = mask_phone(format_e164_for_call_log(to_number or "unknown"))
     return resolved_from, resolved_to
 
 

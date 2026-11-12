@@ -6,6 +6,7 @@ import logging
 from typing import TYPE_CHECKING, Any, Dict, Optional
 from urllib.parse import quote
 
+from apps.pii import mask_phone
 from apps.telephony.base import extract_app_id, fail, request_json, success
 
 if TYPE_CHECKING:
@@ -172,8 +173,8 @@ async def initiate_call(
     )
     logger.info(
         "Plivo outbound call initiated: %s → %s request_uuid=%s",
-        from_number,
-        to_number,
+        mask_phone(from_number),
+        mask_phone(to_number),
         call_uuid,
     )
     return success(

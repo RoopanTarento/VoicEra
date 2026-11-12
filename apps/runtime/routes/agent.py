@@ -196,10 +196,10 @@ async def agent_websocket(websocket: WebSocket, org_id: str, agent_id: str) -> N
             try:
                 call_log = await backend_client.get_call(call_id, org_id)
                 logger.info(
-                    "Call context call_id={} call_type={} custom_variables={}",
+                    "Call context call_id={} call_type={} custom_variable_keys={}",
                     call_id,
                     call_log.get("call_type"),
-                    call_log.get("custom_variables"),
+                    sorted((call_log.get("custom_variables") or {}).keys()),
                 )
             except BackendError as exc:
                 logger.warning(

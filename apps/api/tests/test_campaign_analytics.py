@@ -82,6 +82,8 @@ def test_analytics_route(client: TestClient) -> None:
             return_value=campaign,
         ),
         patch("app.routers.campaign.get_call_analytics", return_value=stats),
+        # The same route also returns post-call results (VoicEra call analysis).
+        patch("app.services.call_analysis.campaign_analytics", return_value={"outcomes": []}),
     ):
         response = client.get("/api/v1/campaign/camp-1/analytics")
     assert response.status_code == 200

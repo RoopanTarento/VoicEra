@@ -7,6 +7,7 @@ import { Spinner } from "@/components/ui/Spinner";
 import { getAgent } from "@/lib/api-client";
 import { agentToForm } from "@/lib/agent-mapper";
 import { useToast } from "@/components/ui/useToast";
+import { RequirePermission } from "@/components/PermissionsProvider";
 import type { AgentApiResponse } from "@/lib/api-types";
 import type { AgentForm } from "@/lib/wizard-data";
 import { AgentBasicsStep } from "@/components/wizard/AgentBasicsStep";
@@ -178,17 +179,19 @@ export default function EditAgentPage({ params }: { params: Promise<{ agentId: s
 
   return (
     <main className="flex w-full flex-col gap-6">
-      {loadError ? (
-        <div className="rounded-v-md border border-v-danger-line bg-v-danger-pale px-4 py-3 text-sm text-v-danger">
-          {loadError}
-        </div>
-      ) : agent ? (
-        <EditForm agent={agent} onSaved={setAgent} onNotify={notify} />
-      ) : (
-        <div className="flex items-center gap-2 text-sm text-v-muted">
-          <Spinner /> Loading agent…
-        </div>
-      )}
+      <RequirePermission permission="agents:write" what="edit agents">
+        {loadError ? (
+          <div className="rounded-v-md border border-v-danger-line bg-v-danger-pale px-4 py-3 text-sm text-v-danger">
+            {loadError}
+          </div>
+        ) : agent ? (
+          <EditForm agent={agent} onSaved={setAgent} onNotify={notify} />
+        ) : (
+          <div className="flex items-center gap-2 text-sm text-v-muted">
+            <Spinner /> Loading agent…
+          </div>
+        )}
+      </RequirePermission>
 
       {toastNode}
     </main>

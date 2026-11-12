@@ -122,6 +122,10 @@
   --animate-v-drift: v-drift 18s ease-in-out infinite;
   --animate-v-drift-rev: v-drift 21s ease-in-out infinite reverse;
   --animate-v-turn-in: v-turn-in 0.6s cubic-bezier(0.4, 0, 0.2, 1) both;
+  --animate-v-spin: v-spin 2.2s linear infinite;
+  --animate-v-spin-fast: v-spin 1s linear infinite;
+  --animate-v-breathe: v-breathe 1.6s ease-in-out infinite;
+  --animate-v-breathe-fast: v-breathe 0.9s ease-in-out infinite;
 
   @keyframes v-rise {
     0% {
@@ -215,6 +219,23 @@
     100% {
       opacity: 1;
       transform: none;
+    }
+  }
+  @keyframes v-spin {
+    0% {
+      transform: rotate(0deg);
+    }
+    100% {
+      transform: rotate(360deg);
+    }
+  }
+  @keyframes v-breathe {
+    0%,
+    100% {
+      transform: scale(0.88);
+    }
+    50% {
+      transform: scale(1.08);
     }
   }
 }

@@ -16,7 +16,7 @@ from app.models.schemas import (
     PhoneNumberResponse,
     SuccessResponse,
 )
-from app.services import agent_telephony_service, phone_number_service
+from app.services import agent_telephony_service, audit_log, phone_number_service
 from app.services.agent_telephony_service import AgentTelephonyError
 from app.services.phone_number_service import PhoneNumberError, PhoneNumberNotFoundError
 
@@ -102,7 +102,7 @@ async def attach_phone_number(
     """Add to inventory and optionally attach to an agent (provider link included)."""
     org_id = _require_active_org(current_user)
     try:
-        return await phone_number_service.attach(
+        result = await phone_number_service.attach(
             org_id,
             body.phone_number,
             body.provider,
@@ -113,6 +113,18 @@ async def attach_phone_number(
         _raise_phone_error(exc)
     except AgentTelephonyError as exc:
         _raise_telephony(exc)
+    else:
+        audit_log.record(
+            org_id,
+            entity_type="phone_number",
+            action="linked" if body.agent_id else "created",
+            actor_email=str(current_user["email"]),
+            actor_role=str(current_user.get("role") or ""),
+            entity_id=body.phone_number,
+            entity_name=body.phone_number,
+            detail=f"agent_id={body.agent_id}" if body.agent_id else None,
+        )
+        return result
 
 
 @router.delete("/detach", response_model=SuccessResponse)
@@ -123,7 +135,7 @@ async def detach_phone_number(
     """Detach from agent and unlink at the telephony provider."""
     org_id = _require_active_org(current_user)
     try:
-        return await phone_number_service.detach(
+        result = await phone_number_service.detach(
             org_id,
             body.phone_number,
             member_email=current_user.get("email"),
@@ -132,6 +144,17 @@ async def detach_phone_number(
         _raise_phone_error(exc)
     except AgentTelephonyError as exc:
         _raise_telephony(exc)
+    else:
+        audit_log.record(
+            org_id,
+            entity_type="phone_number",
+            action="unlinked",
+            actor_email=str(current_user["email"]),
+            actor_role=str(current_user.get("role") or ""),
+            entity_id=body.phone_number,
+            entity_name=body.phone_number,
+        )
+        return result
 
 
 @router.delete("/remove", response_model=SuccessResponse)

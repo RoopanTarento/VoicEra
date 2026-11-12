@@ -15,7 +15,9 @@ logger = logging.getLogger(__name__)
 ROLE_SUPER_ADMIN = "super_admin"
 ROLE_ADMIN = "admin"
 ROLE_MEMBER = "member"
-VALID_ROLES = frozenset({ROLE_SUPER_ADMIN, ROLE_ADMIN, ROLE_MEMBER})
+VALID_ROLES = frozenset(
+    {ROLE_SUPER_ADMIN, ROLE_ADMIN, ROLE_MEMBER, "campaign_manager"}
+)  # see app.rbac.ROLES
 
 
 def _ensure_index(
@@ -272,6 +274,74 @@ def _ensure_queued_runs(db: Database, existing: set[str]) -> None:
     )
 
 
+def _ensure_copilot_conversations(db: Database, existing: set[str]) -> None:
+    if "CopilotConversations" not in existing:
+        logger.info("Creating CopilotConversations collection")
+    conversations = db["CopilotConversations"]
+    _ensure_index(
+        conversations,
+        "conversation_id",
+        name="conversation_id_unique",
+        unique=True,
+    )
+    _ensure_index(
+        conversations,
+        [("org_id", 1), ("created_by", 1), ("updated_at", -1)],
+        name="org_user_updated_index",
+    )
+
+
+def _ensure_copilot_agent_drafts(db: Database, existing: set[str]) -> None:
+    if "CopilotAgentDrafts" not in existing:
+        logger.info("Creating CopilotAgentDrafts collection")
+    drafts = db["CopilotAgentDrafts"]
+    _ensure_index(drafts, "draft_id", name="draft_id_unique", unique=True)
+    _ensure_index(
+        drafts,
+        [("org_id", 1), ("created_by", 1), ("status", 1)],
+        name="org_user_status_index",
+    )
+
+
+def _ensure_copilot_voice_sessions(db: Database, existing: set[str]) -> None:
+    if "CopilotVoiceSessions" not in existing:
+        logger.info("Creating CopilotVoiceSessions collection")
+    sessions = db["CopilotVoiceSessions"]
+    _ensure_index(sessions, "session_id", name="session_id_unique", unique=True)
+    _ensure_index(sessions, [("org_id", 1), ("status", 1)], name="org_status_index")
+
+
+def _ensure_copilot_attachments(db: Database, existing: set[str]) -> None:
+    if "CopilotAttachments" not in existing:
+        logger.info("Creating CopilotAttachments collection")
+    attachments = db["CopilotAttachments"]
+    _ensure_index(attachments, "attachment_id", name="attachment_id_unique", unique=True)
+    _ensure_index(attachments, [("org_id", 1), ("created_by", 1)], name="org_user_index")
+
+
+def _ensure_audit_log(db: Database, existing: set[str]) -> None:
+    if "AuditLog" not in existing:
+        logger.info("Creating AuditLog collection")
+    audit_log = db["AuditLog"]
+    _ensure_index(audit_log, "log_id", name="log_id_unique", unique=True)
+    _ensure_index(audit_log, [("org_id", 1), ("created_at", -1)], name="org_recent_index")
+    _ensure_index(
+        audit_log,
+        [("org_id", 1), ("entity_type", 1), ("entity_id", 1), ("created_at", -1)],
+        name="org_entity_index",
+    )
+
+
+def _ensure_secure_collections(db: Database) -> None:
+    """VoicEra Secure: contact vault, staging, contact sets, metrics, audit events."""
+    from app.services.secure import security_audit, tenant_keys, vault_repository
+
+    vault_repository.ensure_indexes(db)
+    security_audit.ensure_indexes(db)
+    tenant_keys.ensure_indexes(db)
+    db["LoginAttempts"].create_index([("key", 1), ("at", -1)], name="key_recent_index")
+
+
 def initialize_database() -> None:
     """
     Ensure auth collections and indexes exist.
@@ -294,12 +364,20 @@ def initialize_database() -> None:
         _ensure_call_metrics(db, existing)
         _ensure_campaigns(db, existing)
         _ensure_queued_runs(db, existing)
+        _ensure_copilot_conversations(db, existing)
+        _ensure_copilot_agent_drafts(db, existing)
+        _ensure_copilot_voice_sessions(db, existing)
+        _ensure_copilot_attachments(db, existing)
+        _ensure_audit_log(db, existing)
+        _ensure_secure_collections(db)
 
         logger.info(
             "Database initialization completed "
             "(Organizations, Users, Memberships, ProviderAuth, Agents, "
             "PhoneNumbers, PhoneNumberEvents, KnowledgeDocuments, CallLogs, "
-            "CallMetrics, Campaigns, QueuedRuns)"
+            "CallMetrics, Campaigns, QueuedRuns, CopilotConversations, "
+            "CopilotAgentDrafts, CopilotVoiceSessions, CopilotAttachments, AuditLog, "
+            "VoicEra Secure collections)"
         )
     except Exception as exc:
         logger.error("Error initializing database: %s", exc)

@@ -116,7 +116,9 @@ def test_obd_report_and_csv(client: TestClient) -> None:
     assert "system_call_id" in text
     assert "recording_url" in text
     assert "https://cts.example/rec" in text
-    assert "9823526077" in text
+    # Provider phone numbers are masked in exports (VoicEra Secure).
+    assert "******6077" in text
+    assert "9823526077" not in text
 
 
 def test_obd_report_zip_includes_saved_transcript(client: TestClient) -> None:

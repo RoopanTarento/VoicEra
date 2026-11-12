@@ -4,7 +4,7 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from "
 import { useRouter } from "next/navigation";
 import { SessionTimeoutGuard } from "@/components/auth/SessionTimeoutGuard";
 import { getMe } from "@/lib/api-client";
-import { clearSession, getSession, saveSession, type AuthSession } from "@/lib/auth-storage";
+import { clearSession, getSession, isDemoToken, saveSession, type AuthSession } from "@/lib/auth-storage";
 import { getLastActivityAt, markSessionExpiredForLogin, shouldExpire } from "@/lib/session-timeout";
 
 interface AuthContextValue {
@@ -39,6 +39,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       markSessionExpiredForLogin();
       setLoading(false);
       router.replace("/");
+      return;
+    }
+
+    if (isDemoToken(stored.accessToken)) {
+      setSession(stored);
+      setLoading(false);
       return;
     }
 

@@ -116,6 +116,34 @@ else
     echo "PROVIDER_AUTH_ENCRYPTION_KEY is already set in $ENV_FILE."
 fi
 
+# VoicEra Secure: AES-256 contact-vault key and a separate blind-index key.
+generate_aes_key() {
+    if command -v python3 >/dev/null 2>&1 && python3 -c 'import base64, secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())'; then
+        return
+    fi
+    if command -v openssl >/dev/null 2>&1 && openssl rand -base64 32 | tr '+/' '-_'; then
+        return
+    fi
+    fail "Could not generate a vault key. Install python3 or openssl, or set SECURE_VAULT_KEYS manually in .env."
+}
+
+existing_vault_keys="$(dotenv_value SECURE_VAULT_KEYS || true)"
+if [[ -z "$existing_vault_keys" || "$existing_vault_keys" == *REPLACE_WITH* ]]; then
+    set_dotenv_value SECURE_VAULT_KEYS "v1:$(generate_aes_key)"
+    set_dotenv_value SECURE_VAULT_ACTIVE_KEY_VERSION "v1"
+    echo "Created SECURE_VAULT_KEYS in $ENV_FILE."
+else
+    echo "SECURE_VAULT_KEYS is already set in $ENV_FILE."
+fi
+
+existing_index_key="$(dotenv_value SECURE_VAULT_INDEX_KEY || true)"
+if [[ -z "$existing_index_key" || "$existing_index_key" == *REPLACE_WITH* ]]; then
+    set_dotenv_value SECURE_VAULT_INDEX_KEY "$(generate_aes_key)"
+    echo "Created SECURE_VAULT_INDEX_KEY in $ENV_FILE."
+else
+    echo "SECURE_VAULT_INDEX_KEY is already set in $ENV_FILE."
+fi
+
 echo ""
 echo "This will run:"
 echo "  docker compose -f docker-compose.yaml up --build -d"

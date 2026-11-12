@@ -43,6 +43,7 @@ export function ProfileMenu({
   const [open, setOpen] = useState(false);
   const [orgPickerOpen, setOrgPickerOpen] = useState(false);
   const [organisations, setOrganisations] = useState<OrganisationSummary[]>([]);
+  const [switchError, setSwitchError] = useState("");
   const [switchingOrgId, setSwitchingOrgId] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -77,6 +78,7 @@ export function ProfileMenu({
 
   async function handleSwitchOrg(targetOrgId: string) {
     if (targetOrgId === orgId || switchingOrgId) return;
+    setSwitchError("");
     setSwitchingOrgId(targetOrgId);
     try {
       const result = await switchOrganisation(targetOrgId);
@@ -95,7 +97,8 @@ export function ProfileMenu({
       });
       // eslint-disable-next-line @next/next/no-location-assign-relative-destination
       window.location.assign("/dashboard");
-    } catch {
+    } catch (err) {
+      setSwitchError(err instanceof Error ? err.message : "Couldn't switch organisation.");
       setSwitchingOrgId(null);
     }
   }
@@ -194,6 +197,9 @@ export function ProfileMenu({
                   );
                 })}
               </div>
+              {switchError ? (
+                <p className="border-t border-v-line px-3 py-2 text-[12px] text-v-danger">{switchError}</p>
+              ) : null}
             </div>
           ) : (
             <div className="grid grid-cols-2 border-b border-v-line">

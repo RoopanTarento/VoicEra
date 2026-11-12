@@ -1,4 +1,5 @@
 import { EMPTY_LANGUAGE_STACK, type LanguageStack } from "@/lib/language-stacks";
+import type { AgentUseCase } from "@/lib/api-types";
 
 export type { LanguageStack };
 
@@ -231,6 +232,8 @@ export interface AgentForm {
   /** Default values for `{{var}}` tokens referenced in `prompt` — sent as the
    * agent's `custom_variables`, overridable per call. */
   customVariables: Record<string, string>;
+  /** Scheme discovery (with schemes) or a city survey; null for a free-form agent. */
+  useCase: AgentUseCase | null;
   kbEnabled: boolean;
   kbDocs: string[];
   langs: string[];
@@ -272,6 +275,7 @@ export const DEFAULT_FORM: AgentForm = {
   prompt:
     "You are a helpful agent. You help the caller with their questions. Never speak more than two sentences. Keep your answers concise.",
   customVariables: {},
+  useCase: null,
   kbEnabled: false,
   kbDocs: [],
   langs: ["hi"],
@@ -301,173 +305,6 @@ export const DEFAULT_FORM: AgentForm = {
   vadIdleStopSecs: 0.4,
   vadIdleMinVolume: 0.5,
 };
-
-export const TPL_CATS = [
-  "All",
-  "Agriculture",
-  "Welfare",
-  "Governance",
-  "Education",
-  "Reminders",
-  "Surveys",
-  "Health",
-  "Starters",
-];
-
-export interface AgentTemplate {
-  id: string;
-  name: string;
-  category: string;
-  by: string;
-  lang: string;
-  line: string;
-  note: string;
-  set: Partial<AgentForm>;
-}
-
-export const TEMPLATES: AgentTemplate[] = [
-  {
-    id: "mandi-rate",
-    name: "Mandi rate advisory",
-    category: "Agriculture",
-    by: "VoicEra",
-    lang: "Kannada",
-    line: "ಇಂದಿನ ಟೊಮೇಟೊ ಮಂಡಿ ದರ ಎಷ್ಟು?",
-    note: "Crop-price lookup plus a short weather outlook for the caller's district.",
-    set: {
-      name: "Mandi Rate Advisory",
-      purpose: "Tells farmers today's crop prices and a short weather outlook.",
-      welcome: "Namaskara, mandi dara mahiti kelalu koogi.",
-      langs: ["kn", "hi"],
-      prompt:
-        "You give today's mandi price for the crop the caller names, then a one-line weather outlook for their district. Never guess a price you don't have.",
-    },
-  },
-  {
-    id: "pension-status",
-    name: "Pension status check",
-    category: "Welfare",
-    by: "Govt of Tamil Nadu",
-    lang: "Tamil",
-    line: "எனது ஓய்வூதியம் இன்னும் வரவில்லை.",
-    note: "Looks up an application's status by the caller's registered number.",
-    set: {
-      name: "Pension Status",
-      purpose: "Checks pension application and disbursal status.",
-      langs: ["ta", "te"],
-      prompt:
-        "You confirm the caller's registered phone number, then read back their pension application status plainly. If it is pending, give the expected date.",
-    },
-  },
-  {
-    id: "grievance-intake",
-    name: "Grievance intake",
-    category: "Governance",
-    by: "VoicEra",
-    lang: "Hindi",
-    line: "मेरी शिकायत दर्ज करनी है।",
-    note: "Logs a complaint and reads back a ticket number for follow-up.",
-    set: {
-      name: "Grievance Intake",
-      purpose: "Logs a complaint and issues a ticket number.",
-      langs: ["hi"],
-      prompt:
-        "You collect the caller's complaint in their own words, summarise it back for confirmation, then issue a ticket number and expected response time.",
-    },
-  },
-  {
-    id: "scholarship-eligibility",
-    name: "Scholarship eligibility",
-    category: "Education",
-    by: "IIIT-B",
-    lang: "Kannada",
-    line: "ನಾನು ವಿದ್ಯಾರ್ಥಿವೇತನಕ್ಕೆ ಅರ್ಹನೇ?",
-    note: "FAQ-grounded eligibility answers pulled from the scholarship handbook.",
-    set: {
-      name: "Scholarship Eligibility",
-      purpose: "Answers eligibility questions from the scholarship handbook.",
-      langs: ["kn", "en"],
-      kbEnabled: true,
-      prompt:
-        "Answer eligibility questions only from the attached scholarship handbook. If it isn't covered there, say so and give the helpline number.",
-    },
-  },
-  {
-    id: "appointment-confirmation",
-    name: "Appointment confirmation",
-    category: "Reminders",
-    by: "VoicEra",
-    lang: "Hindi",
-    line: "आपकी अपॉइंटमेंट कल सुबह 10 बजे है।",
-    note: "Confirms, reschedules, or cancels an upcoming appointment.",
-    set: {
-      name: "Appointment Confirmation",
-      purpose: "Confirms, reschedules, or cancels an appointment.",
-      langs: ["hi"],
-      prompt:
-        "State the appointment date and time, then ask the caller to confirm, reschedule, or cancel. Keep the call under a minute.",
-    },
-  },
-  {
-    id: "feedback-survey",
-    name: "Post-visit feedback survey",
-    category: "Surveys",
-    by: "COSS India",
-    lang: "Telugu",
-    line: "మీ సందర్శన ఎలా ఉంది?",
-    note: "A short two-question rating survey after a clinic or office visit.",
-    set: {
-      name: "Post-visit Feedback Survey",
-      purpose: "Runs a two-question satisfaction survey after a visit.",
-      langs: ["te"],
-      prompt:
-        "Ask exactly two questions: a 1-5 satisfaction rating, then one open follow-up. Thank the caller and end the call.",
-    },
-  },
-  {
-    id: "ration-card-status",
-    name: "Ration card status",
-    category: "Welfare",
-    by: "Govt of Odisha",
-    lang: "Odia",
-    line: "ମୋର ରାସନ କାର୍ଡ ଆସିଛି କି?",
-    note: "Status lookup tuned for elderly callers, with extra patience built in.",
-    set: {
-      name: "Ration Card Status",
-      purpose: "Checks ration card application status, elderly-caller tuned.",
-      langs: ["or", "hi"],
-      silenceTimeout: 45,
-      prompt:
-        "Speak slowly and repeat the status once before moving on. Never rush a caller who pauses.",
-    },
-  },
-  {
-    id: "vaccination-followup",
-    name: "Vaccination follow-up",
-    category: "Health",
-    by: "Community Health Network",
-    lang: "Hindi",
-    line: "आपकी दूसरी खुराक अभी बाकी है।",
-    note: "Reminds about a second dose and offers to book the next available slot.",
-    set: {
-      name: "Vaccination Follow-up",
-      purpose: "Reminds about a second dose and books the next slot.",
-      langs: ["hi"],
-      prompt:
-        "Remind the caller their second dose is due, then offer the next three available slots at their nearest centre.",
-    },
-  },
-  {
-    id: "blank-agent",
-    name: "Blank agent",
-    category: "Starters",
-    by: "VoicEra",
-    lang: "Hindi",
-    line: "—",
-    note: "Empty defaults only — a clean starting point.",
-    set: {},
-  },
-];
 
 export interface TestTurn {
   speaker: "agent" | "caller";

@@ -248,7 +248,12 @@ def build_call_log_query(
     if f.created_before:
         created_at["$lte"] = f.created_before
     if created_at:
-        query["created_at"] = created_at
+        if "created_at" in query:
+            # ``extra`` already bounds created_at (e.g. a local-day range):
+            # require both ranges instead of letting one overwrite the other.
+            query.setdefault("$and", []).append({"created_at": created_at})
+        else:
+            query["created_at"] = created_at
 
     return query
 
@@ -316,16 +321,21 @@ def _prepare_call_log_list(docs) -> list[dict[str, Any]]:
 def count_call_logs(
     org_id: str,
     filters: CallLogListFilters | None = None,
+    *,
+    extra: dict[str, Any] | None = None,
 ) -> int:
-    """Count call logs for an organisation with optional filters."""
+    """Count call logs for an organisation with optional filters.
+
+    ``extra`` adds raw Mongo conditions (e.g. a ``created_at`` range).
+    """
     return get_database()[COLLECTION].count_documents(
-        build_call_log_query(org_id, filters)
+        build_call_log_query(org_id, filters, extra=extra)
     )
 
 
-def count_call_logs_by_org(org_id: str) -> int:
-    """Count call logs for an organisation."""
-    return count_call_logs(org_id)
+def count_call_logs_by_org(org_id: str, *, filters: dict[str, Any] | None = None) -> int:
+    """Count call logs for an organisation (optionally filtered, see ``list_call_logs_by_org``)."""
+    return count_call_logs(org_id, extra=filters)
 
 
 def list_call_logs(
@@ -334,11 +344,15 @@ def list_call_logs(
     limit: int = 50,
     offset: int = 0,
     filters: CallLogListFilters | None = None,
+    extra: dict[str, Any] | None = None,
     enrich_campaign_names: bool = True,
 ) -> list[dict[str, Any]]:
-    """List call logs for an organisation with optional filters."""
+    """List call logs for an organisation with optional filters, newest first.
+
+    ``extra`` adds raw Mongo conditions (e.g. a ``created_at`` range).
+    """
     cursor = _paginated_call_log_cursor(
-        build_call_log_query(org_id, filters),
+        build_call_log_query(org_id, filters, extra=extra),
         limit=limit,
         offset=offset,
     )
@@ -354,9 +368,14 @@ def list_call_logs_by_org(
     limit: int = 50,
     offset: int = 0,
     filters: CallLogListFilters | None = None,
+    extra: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """List call logs for an organisation."""
-    return list_call_logs(org_id, limit=limit, offset=offset, filters=filters)
+    """List call logs for an organisation.
+
+    ``filters`` are the typed list filters; ``extra`` adds raw Mongo
+    conditions (e.g. a local-day ``created_at`` range), newest first.
+    """
+    return list_call_logs(org_id, limit=limit, offset=offset, filters=filters, extra=extra)
 
 
 def list_call_logs_by_campaign(

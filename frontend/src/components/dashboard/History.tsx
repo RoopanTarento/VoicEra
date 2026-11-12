@@ -5,10 +5,12 @@ import { useSearchParams } from "next/navigation";
 import { ChevronDown, Download, Eye, FileText, RefreshCw, Search, Table, User } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
+import { CallOutcomeBadge } from "@/components/ui/CallOutcomeBadge";
 import { CallTypeBadge, CALL_TYPE_META } from "@/components/ui/CallTypeBadge";
 import { Select } from "@/components/ui/Select";
 import { Spinner } from "@/components/ui/Spinner";
 import { useAuth } from "@/components/AuthProvider";
+import { usePermissions } from "@/components/PermissionsProvider";
 import Link from "next/link";
 import { listAgents } from "@/lib/api-client";
 import {
@@ -68,6 +70,7 @@ function callsToCsv(rows: CallLogItem[], meta: ReportMeta): string {
     "To",
     "From",
     "Status",
+    "Outcome",
     "Called On",
     "Duration (s)",
   ];
@@ -75,9 +78,10 @@ function callsToCsv(rows: CallLogItem[], meta: ReportMeta): string {
     r.call_type,
     r.agent_name ?? r.agent_id,
     r.campaign_name ?? r.campaign_id ?? "",
-    r.to_number,
-    r.from_number,
+    displayToNumber(r),
+    displayFromNumber(r),
     r.status,
+    r.analysis?.outcome_label ?? "",
     r.start_time_utc ?? r.created_at ?? "",
     r.duration ?? "",
   ]);
@@ -109,6 +113,8 @@ interface ExportMenuProps {
   orgId: string | undefined;
   meta: ReportMeta;
   selectedAgent: AgentApiResponse | null;
+  /** Transcript export needs recordings:read. */
+  canExportTranscripts: boolean;
   onNotify: (title: string, note: string) => void;
   onPrint: () => void;
 }
@@ -122,6 +128,7 @@ function ExportMenu({
   orgId,
   meta,
   selectedAgent,
+  canExportTranscripts,
   onNotify,
   onPrint,
 }: ExportMenuProps) {
@@ -249,15 +256,19 @@ function ExportMenu({
       disabled: filteredCalls.length === 0,
       loading: false,
     },
-    {
-      key: "transcripts",
-      label: "Export all transcripts",
-      hint: "Matching current filters, CSV",
-      icon: Download,
-      onClick: exportAllTranscripts,
-      disabled: !orgId,
-      loading: busy === "transcripts",
-    },
+    ...(canExportTranscripts
+      ? [
+          {
+            key: "transcripts",
+            label: "Export all transcripts",
+            hint: "Matching current filters, CSV",
+            icon: Download,
+            onClick: exportAllTranscripts,
+            disabled: !orgId,
+            loading: busy === "transcripts",
+          },
+        ]
+      : []),
     {
       key: "agent",
       label: "Export for selected agent",
@@ -267,7 +278,7 @@ function ExportMenu({
       disabled: !orgId || !selectedAgent,
       loading: busy === "agent",
     },
-  ] as const;
+  ];
 
   return (
     <div ref={menuRef} className="relative">
@@ -310,6 +321,7 @@ function ExportMenu({
 
 export function History({ onNotify }: { onNotify: (title: string, note: string) => void }) {
   const { session } = useAuth();
+  const { can } = usePermissions();
   const orgId = session?.orgId;
   const reportMeta: ReportMeta = {
     orgName: session?.orgName ?? session?.orgId ?? "—",
@@ -761,6 +773,7 @@ export function History({ onNotify }: { onNotify: (title: string, note: string) 
             orgId={orgId}
             meta={reportMeta}
             selectedAgent={selectedAgent}
+            canExportTranscripts={can("recordings:read")}
             onNotify={onNotify}
             onPrint={() => window.print()}
           />
@@ -790,7 +803,7 @@ export function History({ onNotify }: { onNotify: (title: string, note: string) 
         </div>
       ) : (
         <div className="overflow-x-auto rounded-v-md border border-v-line bg-white">
-          <table className="w-full min-w-[980px] border-collapse text-sm">
+          <table className="w-full min-w-[1080px] border-collapse text-sm">
             <thead>
               <tr className="border-b border-v-line text-left font-mono text-[10px] uppercase tracking-[.1em] text-v-muted">
                 <th className="px-4 py-3 font-medium">Call Type</th>
@@ -799,6 +812,7 @@ export function History({ onNotify }: { onNotify: (title: string, note: string) 
                 <th className="px-4 py-3 font-medium">To</th>
                 <th className="px-4 py-3 font-medium">From</th>
                 <th className="px-4 py-3 font-medium">Call Status</th>
+                <th className="px-4 py-3 font-medium">Outcome</th>
                 <th className="whitespace-nowrap px-4 py-3 font-medium">Called On</th>
                 <th className="px-4 py-3 font-medium">Duration</th>
                 <th className="px-4 py-3 font-medium">Conversation Data</th>
@@ -828,6 +842,9 @@ export function History({ onNotify }: { onNotify: (title: string, note: string) 
                     <td className="whitespace-nowrap px-4 py-3 text-v-muted">{displayFromNumber(c)}</td>
                     <td className="px-4 py-3">
                       <Badge tone={statusTone(c)}>{c.status.replace("_", " ")}</Badge>
+                    </td>
+                    <td className="px-4 py-3">
+                      <CallOutcomeBadge analysis={c.analysis} />
                     </td>
                     <td className="whitespace-nowrap px-4 py-3 text-v-muted">{formatDateTime(c.start_time_utc ?? c.created_at)}</td>
                     <td className="px-4 py-3 text-v-muted">{formatDuration(c.duration)}</td>
@@ -862,7 +879,14 @@ export function History({ onNotify }: { onNotify: (title: string, note: string) 
       ) : null}
 
       {selectedCall ? (
-        <CallDetailSheet call={selectedCall} onClose={() => setSelectedCall(null)} />
+        <CallDetailSheet
+          key={selectedCall.call_id}
+          call={selectedCall}
+          onClose={() => setSelectedCall(null)}
+          onCallUpdated={(updated) =>
+            setCalls((prev) => prev.map((c) => (c.call_id === updated.call_id ? updated : c)))
+          }
+        />
       ) : null}
     </div>
 

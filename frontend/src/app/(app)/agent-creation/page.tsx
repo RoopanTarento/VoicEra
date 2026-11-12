@@ -5,6 +5,9 @@ import { useRouter } from "next/navigation";
 import { CheckCircle2, Clock, MessageSquare, Phone, Settings, User } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { StartStep } from "@/components/wizard/StartStep";
+import { QuickAgentFlow } from "@/components/wizard/QuickAgentFlow";
+import { Spinner } from "@/components/ui/Spinner";
+import { listAgents } from "@/lib/api-client";
 import { AgentBasicsStep } from "@/components/wizard/AgentBasicsStep";
 import { LanguageProvidersStep } from "@/components/wizard/LanguageProvidersStep";
 import { DeliveryStep } from "@/components/wizard/DeliveryStep";
@@ -13,15 +16,17 @@ import { ReviewStep } from "@/components/wizard/ReviewStep";
 import { PromptLibraryDialog } from "@/components/wizard/PromptLibraryDialog";
 import { SectionNav, type SectionNavItem } from "@/components/wizard/SectionNav";
 import { useToast } from "@/components/ui/useToast";
-import { AgentForm, AgentTemplate, DEFAULT_FORM } from "@/lib/wizard-data";
+import { RequirePermission } from "@/components/PermissionsProvider";
+import { AgentForm, DEFAULT_FORM } from "@/lib/wizard-data";
+import type { AgentUseCase } from "@/lib/api-types";
 import { PromptModule } from "@/lib/prompt-modules";
 import { useSyncCustomVariables } from "@/lib/use-sync-custom-variables";
-import { activeLanguageStack, allLanguageStacksReady, syncLanguageStacks } from "@/lib/language-stacks";
+import { activeLanguageStack, allLanguageStacksReady } from "@/lib/language-stacks";
 import { useLanguageStackDefaults } from "@/lib/use-language-stack-defaults";
 import { useWizardCatalogs } from "@/lib/use-wizard-catalogs";
 
 const STEPS: SectionNavItem[] = [
-  { id: "start", title: "Setup", subtitle: "Start from scratch", icon: MessageSquare },
+  { id: "start", title: "Setup", subtitle: "Pick a use case", icon: MessageSquare },
   { id: "agent", title: "Agent", subtitle: "Name, greeting & prompt", icon: User },
   { id: "language", title: "Engine", subtitle: "STT · LLM · TTS", icon: Settings },
   { id: "delivery", title: "Delivery", subtitle: "Select provider", icon: Phone },
@@ -43,6 +48,54 @@ function wizardContentWidthClass(stepId: string): string {
 }
 
 export default function AgentCreationPage() {
+  return (
+    <RequirePermission permission="agents:write" what="create agents">
+      <FlowChooser />
+    </RequirePermission>
+  );
+}
+
+/** An organisation's first agent gets the short guided flow (department →
+ * schemes → agent → language); from the second agent on, or with ?full=1,
+ * it's the full wizard. */
+function FlowChooser() {
+  const [flow, setFlow] = useState<"checking" | "quick" | "full">("checking");
+  const { notify, toastNode } = useToast();
+
+  useEffect(() => {
+    let cancelled = false;
+    const wantsFull = new URLSearchParams(window.location.search).get("full") === "1";
+    (wantsFull ? Promise.resolve(null) : listAgents())
+      .then((agents) => {
+        if (!cancelled) setFlow(agents && agents.length === 0 ? "quick" : "full");
+      })
+      .catch(() => {
+        if (!cancelled) setFlow("full");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (flow === "checking") {
+    return (
+      <div className="flex min-h-[40vh] items-center justify-center gap-2 text-sm text-v-muted">
+        <Spinner light={false} /> Getting ready…
+      </div>
+    );
+  }
+  if (flow === "quick") {
+    return (
+      <>
+        <QuickAgentFlow onNotify={notify} />
+        {toastNode}
+      </>
+    );
+  }
+  return <AgentCreation />;
+}
+
+function AgentCreation() {
   const router = useRouter();
   const [step, setStep] = useState(0);
   // Furthest step ever reached — going back to re-check an earlier step
@@ -71,6 +124,8 @@ export default function AgentCreationPage() {
   }, [step]);
 
   useSyncCustomVariables(form, onChange);
+  // Per-language STT/TTS/LLM stacks: pick providers, models and voice that
+  // match each language's filtered catalog (replaces the old flat-field defaults).
   useLanguageStackDefaults(form, catalogs, setForm);
 
   const jumpTo = (id: string) => {
@@ -78,26 +133,12 @@ export default function AgentCreationPage() {
     if (idx >= 0) setStep(idx);
   };
 
-  const useTemplate = (t: AgentTemplate) => {
-    setForm((f) => {
-      const merged = { ...f, ...t.set };
-      const langs = merged.langs ?? f.langs;
-      const primaryLang = merged.primaryLang ?? langs[0] ?? f.primaryLang;
-      const synced = syncLanguageStacks(
-        langs,
-        merged.languageStacks ?? f.languageStacks,
-        merged.activeLang ?? f.activeLang,
-        primaryLang,
-      );
-      return {
-        ...merged,
-        langs,
-        primaryLang: synced.primaryLang,
-        languageStacks: synced.languageStacks,
-        activeLang: synced.activeLang,
-      };
-    });
-    jumpTo("review");
+  // The Agent step's use-case row opens pre-set to this (a scheme intent or
+  // the city survey), so the user only picks the schemes or survey and asks
+  // for the agent to be written.
+  const pickUseCase = (useCase: AgentUseCase) => {
+    setForm((f) => ({ ...f, useCase }));
+    jumpTo("agent");
   };
 
   const insertModule = (m: PromptModule) => {
@@ -153,7 +194,7 @@ export default function AgentCreationPage() {
           ) : null}
 
           {currentId === "start" ? (
-            <StartStep onStartScratch={() => setStep(1)} onUseTemplate={useTemplate} />
+            <StartStep onStartScratch={() => setStep(1)} onPickUseCase={pickUseCase} />
           ) : null}
 
           {catalogs.loading && currentId !== "start" ? (

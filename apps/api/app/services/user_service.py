@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -12,8 +13,10 @@ from app.config import settings
 from app.database import get_database
 from app.database_init import ROLE_MEMBER, ROLE_SUPER_ADMIN
 from app.models.schemas import UserCreate
-from app.services import member_service, org_service
+from app.services import login_guard, member_service, org_service
 from app.services.email_service import send_password_reset_email
+
+from app.rbac import effective_role
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +35,7 @@ def _build_organisations_list(email: str) -> list[dict[str, Any]]:
             {
                 "org_id": org_id,
                 "name": org.get("name", ""),
-                "role": membership.get("role", ROLE_MEMBER),
+                "role": effective_role(membership.get("role", ROLE_MEMBER)),
             }
         )
     return result
@@ -89,21 +92,58 @@ def _set_last_login(email: str) -> None:
     )
 
 
+INVALID_CREDENTIALS = "Incorrect email or password."
+
+
+def find_user(email: str) -> dict[str, Any] | None:
+    """Look a user up by email, ignoring case.
+
+    New accounts are stored lower-case; the case-insensitive fallback keeps
+    accounts created before that (with mixed-case emails) able to sign in.
+    """
+    users = get_database()["Users"]
+    normalized = (email or "").strip().lower()
+    user = users.find_one({"email": normalized})
+    if user:
+        return user
+    return users.find_one({"email": {"$regex": f"^{re.escape(normalized)}$", "$options": "i"}})
+
+
+def org_status(org_id: str) -> str:
+    """'active', 'suspended', 'offboarded' or 'missing' (VoicEra Secure adopter status)."""
+    org = get_database()["Organizations"].find_one({"org_id": org_id}, {"status": 1})
+    if not org:
+        return "missing"
+    return str(org.get("status") or "active")
+
+
 def _resolve_active_membership(
     email: str,
     user_doc: dict[str, Any],
-) -> dict[str, Any] | None:
-    """Pick membership for login: saved default_org_id if still valid, else oldest."""
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Pick the membership to sign in to and explain when none is usable.
+
+    Prefers the saved default organisation, then the oldest membership, but
+    only among adopters that are active. Returns ``(membership, None)`` or
+    ``(None, reason)``.
+    """
     memberships = member_service.list_memberships_for_email(email)
     if not memberships:
-        return None
+        return None, "Your account isn't a member of any organisation. Ask an admin to invite you."
+
+    statuses = {m["org_id"]: org_status(str(m["org_id"])) for m in memberships}
+    usable = [m for m in memberships if statuses.get(m["org_id"]) == "active"]
+    if not usable:
+        if any(v == "suspended" for v in statuses.values()):
+            return None, "Your organisation is suspended. Contact the VoicEra platform team."
+        return None, "Your organisation is no longer active on VoicEra."
 
     preferred = user_doc.get("default_org_id")
     if preferred:
-        for membership in memberships:
+        for membership in usable:
             if membership.get("org_id") == preferred:
-                return membership
-    return memberships[0]
+                return membership, None
+    return usable[0], None
 
 
 def check_email_for_org(email: str, org_id: str | None = None) -> dict[str, Any]:
@@ -160,7 +200,7 @@ def sign_up_user(user_data: UserCreate) -> dict[str, Any]:
         users = db["Users"]
         memberships = db["Memberships"]
 
-        existing_user = users.find_one({"email": user_data.email})
+        existing_user = find_user(user_data.email)
         if existing_user:
             stored = existing_user.get("password")
             if not stored or not verify_password(user_data.password, stored):
@@ -226,26 +266,36 @@ def sign_up_user(user_data: UserCreate) -> dict[str, Any]:
         return {"status": "fail", "message": f"Error creating user: {exc}"}
 
 
-def validate_user_and_get_token(email: str, password: str) -> dict[str, Any]:
-    """Validate credentials and return a JWT for the user's default organisation."""
+def validate_user_and_get_token(email: str, password: str, *, ip: str | None = None) -> dict[str, Any]:
+    """Validate credentials and return a JWT for the user's default organisation.
+
+    Unknown emails and wrong passwords get the same message so accounts can't
+    be discovered by probing. Repeated failures lock the email (and IP) out
+    for 15 minutes; see ``login_guard``.
+    """
     try:
-        user = get_database()["Users"].find_one({"email": email})
-        if not user:
-            return {"status": "fail", "message": "User not found"}
+        email = (email or "").strip().lower()
+        try:
+            login_guard.check(email, ip)
+        except login_guard.LoginLocked as exc:
+            login_guard.record_lockout(email, ip)
+            return {"status": "locked", "message": str(exc), "retry_after": exc.retry_after_seconds}
 
-        stored = user.get("password")
-        if not stored or not verify_password(password, stored):
-            return {"status": "fail", "message": "Invalid password"}
+        user = find_user(email)
+        stored = (user or {}).get("password")
+        if not user or not stored or not verify_password(password, stored):
+            login_guard.record_failure(email, ip, reason="Unknown email" if not user else "Wrong password")
+            return {"status": "fail", "message": INVALID_CREDENTIALS}
+        email = str(user["email"])
 
-        active = _resolve_active_membership(email, user)
+        active, reason = _resolve_active_membership(email, user)
         if not active:
-            return {
-                "status": "fail",
-                "message": "User has no organisation memberships",
-            }
+            login_guard.record_failure(email, ip, reason=reason or "No usable organisation")
+            return {"status": "forbidden", "message": reason}
+        login_guard.clear(email)
 
         org_id = active["org_id"]
-        role = active.get("role", ROLE_MEMBER)
+        role = effective_role(active.get("role", ROLE_MEMBER))
         is_first_login = user.get("last_logged_in_at") is None
         # Keep default in sync when falling back to oldest membership
         if user.get("default_org_id") != org_id:
@@ -272,7 +322,17 @@ def switch_organisation(email: str, org_id: str) -> dict[str, Any]:
                 "status": "fail",
                 "message": "Not a member of this organization",
             }
-        role = membership.get("role", ROLE_MEMBER)
+        status_now = org_status(org_id)
+        if status_now != "active":
+            return {
+                "status": "fail",
+                "message": (
+                    "That organisation is suspended. Contact the VoicEra platform team."
+                    if status_now == "suspended"
+                    else "That organisation is no longer active on VoicEra."
+                ),
+            }
+        role = effective_role(membership.get("role", ROLE_MEMBER))
         _set_default_org(email, org_id)
         return _auth_success_response(
             email,
@@ -370,7 +430,7 @@ def get_profile(email: str, active_org_id: str | None) -> dict[str, Any] | None:
             "email": email,
             "name": user.get("name"),
             "org_id": active["org_id"],
-            "role": active["role"],
+            "role": effective_role(active["role"]),
             "organisation_name": active.get("name"),
             "organisations": organisations,
             "created_at": user.get("created_at"),
@@ -399,12 +459,13 @@ def request_password_reset(email: str) -> dict[str, Any]:
     try:
         db = get_database()
         users = db["Users"]
-        user = users.find_one({"email": email})
+        user = find_user(email)
         if not user:
             return {
                 "status": "success",
                 "message": "If user exists, password reset email has been sent",
             }
+        email = str(user["email"])
 
         reset_token = str(uuid.uuid4())
         expires_at = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()

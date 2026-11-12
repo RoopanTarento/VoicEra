@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -11,6 +13,12 @@ from fastapi.testclient import TestClient
 from app.auth import get_current_user
 from app.routers import calls
 from app.services.call_log_service import CallLogListFilters
+
+
+@pytest.fixture(autouse=True)
+def _member_is_super_admin(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The call routes look up the caller's role (VoicEra Secure RBAC); no Mongo here."""
+    monkeypatch.setattr("app.rbac.membership_role", lambda email, org_id: "super_admin")
 
 
 def _admin() -> dict[str, Any]:

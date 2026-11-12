@@ -22,6 +22,7 @@ import { Badge } from "@/components/ui/Badge";
 import { ProviderTypeBadge } from "@/components/ui/ProviderTypeBadge";
 import { Spinner } from "@/components/ui/Spinner";
 import { Dialog, DialogHeader } from "@/components/ui/Dialog";
+import { usePermissions } from "@/components/PermissionsProvider";
 import {
   deleteProviderAuth,
   getAuthCatalog,
@@ -509,6 +510,8 @@ export function Integrations({
   const [activeProviderType, setActiveProviderType] = useState<"all" | string>("all");
   const [selected, setSelected] = useState<ProviderEntry | null>(null);
   const [saving, setSaving] = useState(false);
+  // Connecting, changing and disconnecting providers: integrations:write.
+  const canEdit = usePermissions().can("integrations:write");
 
   const load = useCallback(async () => {
     setLoadError("");
@@ -741,10 +744,12 @@ export function Integrations({
                             </div>
                           </div>
                         </div>
-                        <Button variant="ghost" size="sm" onClick={() => setSelected(entry)}>
-                          <Settings2 className="size-3.5" strokeWidth={1.75} />
-                          Manage
-                        </Button>
+                        {canEdit ? (
+                          <Button variant="ghost" size="sm" onClick={() => setSelected(entry)}>
+                            <Settings2 className="size-3.5" strokeWidth={1.75} />
+                            Manage
+                          </Button>
+                        ) : null}
                       </div>
                     );
                   })}
@@ -787,19 +792,21 @@ export function Integrations({
                             </div>
                           </div>
                         </div>
-                        <Button variant="ghost" size="sm" onClick={() => setSelected(entry)}>
-                          {connected ? (
-                            <>
-                              <Settings2 className="size-3.5" strokeWidth={1.75} />
-                              Manage
-                            </>
-                          ) : (
-                            <>
-                              <Plus className="size-3.5" strokeWidth={1.75} />
-                              Connect
-                            </>
-                          )}
-                        </Button>
+                        {canEdit ? (
+                          <Button variant="ghost" size="sm" onClick={() => setSelected(entry)}>
+                            {connected ? (
+                              <>
+                                <Settings2 className="size-3.5" strokeWidth={1.75} />
+                                Manage
+                              </>
+                            ) : (
+                              <>
+                                <Plus className="size-3.5" strokeWidth={1.75} />
+                                Connect
+                              </>
+                            )}
+                          </Button>
+                        ) : null}
                       </div>
                     );
                   })}
@@ -871,14 +878,17 @@ export function Integrations({
                       key={entry.providerId}
                       type="button"
                       onClick={() => setSelected(entry)}
-                      className="group flex cursor-pointer flex-col gap-2 rounded-v-md border border-v-line bg-white p-4 text-left transition-shadow hover:shadow-[0_4px_16px_rgba(11,11,12,0.08)]"
+                      disabled={!canEdit}
+                      className="group flex cursor-pointer flex-col gap-2 rounded-v-md border border-v-line bg-white p-4 text-left transition-shadow hover:shadow-[0_4px_16px_rgba(11,11,12,0.08)] disabled:cursor-default disabled:hover:shadow-none"
                     >
                       <div className="flex items-start justify-between gap-2">
                         <span className="font-medium text-v-fg">{name}</span>
-                        <span className="flex items-center gap-1 rounded-full border border-v-line px-2.5 py-1 text-xs font-medium text-v-muted opacity-0 transition-opacity group-hover:opacity-100">
-                          <Plus className="size-3.5" strokeWidth={1.75} />
-                          Connect
-                        </span>
+                        {canEdit ? (
+                          <span className="flex items-center gap-1 rounded-full border border-v-line px-2.5 py-1 text-xs font-medium text-v-muted opacity-0 transition-opacity group-hover:opacity-100">
+                            <Plus className="size-3.5" strokeWidth={1.75} />
+                            Connect
+                          </span>
+                        ) : null}
                       </div>
                       <div className="flex flex-wrap gap-1">
                         {(entry.catalog.kinds ?? []).map((k) => {
@@ -917,7 +927,7 @@ export function Integrations({
         </>
       )}
 
-      {selected ? (
+      {selected && canEdit ? (
         <ConnectModal
           entry={selected}
           configured={configured.includes(selected.providerId)}

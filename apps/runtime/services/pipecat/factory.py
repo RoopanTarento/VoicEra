@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.pipeline.pipeline import Pipeline
@@ -65,6 +65,8 @@ def build_pipeline_components(
     agent: dict[str, Any],
     org_id: str,
     behaviour: dict[str, Any],
+    extra_tools: list[Any] | None = None,
+    aggregator_hooks: Callable[[LLMContextAggregatorPair], None] | None = None,
 ) -> PipelineComponents:
     speaking_vad = vad_params_from_behaviour(behaviour, key="vad")
     idle_vad = vad_params_from_behaviour(behaviour, key="vad_idle")
@@ -129,6 +131,12 @@ def build_pipeline_components(
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context, user_params=user_params
     )
+    if aggregator_hooks is not None:
+        # Generic extension point for a caller that needs to observe turns
+        # beyond what this shared pipeline builder does itself — e.g. Copilot
+        # voice sessions registering on_user_turn_stopped/on_assistant_turn_stopped
+        # to persist transcript turns. factory.py stays agnostic about why.
+        aggregator_hooks((user_aggregator, assistant_aggregator))
 
     kb_context_processor = configure_knowledge_base(
         agent,
@@ -136,6 +144,12 @@ def build_pipeline_components(
         context=context,
         aggregators=(user_aggregator, assistant_aggregator),
     )
+    if extra_tools:
+        # Only used by callers with no knowledge-base tool of their own (e.g.
+        # Copilot voice sessions, which always have knowledge_base.enabled
+        # False) — configure_knowledge_base's own tool-mode path is the only
+        # other caller of context.set_tools, so there's no clobbering risk.
+        context.set_tools(list(extra_tools))
     configure_call_ending(
         behaviour,
         context=context,

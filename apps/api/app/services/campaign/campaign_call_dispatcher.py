@@ -29,6 +29,9 @@ from app.services.agent_telephony_service import (
     load_telephony_client,
 )
 from apps.telephony.phone_format import format_e164_for_call_log
+from apps.pii import mask_phone, redact_text, scrub_mapping
+from app.services.secure import gateway as secure_gateway
+from app.services.secure import security_audit
 
 logger = logging.getLogger(__name__)
 
@@ -167,7 +170,17 @@ class CampaignCallDispatcher:
         if not queued_runs:
             return 0
 
-        if bulk_client is not None and _client_supports_bulk(bulk_client):
+        # VoicEra Secure: vault contacts (``contact_id``) are only ever dialled
+        # one at a time through the secure gateway, so a batch that holds any
+        # of them never goes to a provider bulk dial (which needs raw numbers).
+        has_vault_contacts = any(
+            (q.get("context_variables") or {}).get("contact_id") for q in queued_runs
+        )
+        if (
+            bulk_client is not None
+            and _client_supports_bulk(bulk_client)
+            and not has_vault_contacts
+        ):
             return await self._process_bulk_batch(
                 campaign, queued_runs, bulk_client
             )
@@ -211,6 +224,23 @@ class CampaignCallDispatcher:
                     state="failed",
                     processed_at=datetime.now(timezone.utc).isoformat(),
                 )
+
+        secure_runs = [q for q in queued_runs if (q.get("context_variables") or {}).get("contact_id")]
+        if secure_runs:
+            dialled = sum(1 for q in secure_runs if str(q["queued_run_id"]) in processed_ids)
+            security_audit.record(
+                "contact.bulk_resolve",
+                org_id=org_id,
+                actor_type="service",
+                actor_id="campaign-dispatcher",
+                outcome="success" if dialled == len(secure_runs) else "error",
+                metadata={
+                    "campaign_id": campaign_id,
+                    "batch_size": len(secure_runs),
+                    "dialled": dialled,
+                    "not_dialled": len(secure_runs) - dialled,
+                },
+            )
 
         return processed_count
 
@@ -277,12 +307,13 @@ class CampaignCallDispatcher:
         try:
             result = await client.initiate_bulk_calls(**bulk_kwargs)
         except Exception as exc:
-            logger.error("Bulk campaign dial failed for %s: %s", campaign_id[:8], exc)
+            message = redact_text(str(exc)) or "Bulk dial failed"
+            logger.error("Bulk campaign dial failed for %s: %s", campaign_id[:8], message)
             await self._return_unprocessed_claims(queued_runs, set())
-            raise OutboundCallError(str(exc), status_code=502) from exc
+            raise OutboundCallError(message, status_code=502) from exc
 
         if result.get("status") != "success":
-            message = str(result.get("message") or "Bulk dial failed")
+            message = redact_text(str(result.get("message") or "Bulk dial failed"))
             for queued_run, _ in valid:
                 repo.update_queued_run(
                     str(queued_run["queued_run_id"]),
@@ -344,7 +375,9 @@ class CampaignCallDispatcher:
 
             context = dict(queued_run.get("context_variables") or {})
             call_id = str(uuid.uuid4())
-            to_number = format_e164_for_call_log(phone)
+            # VoicEra Secure: the callee is contact PII; the CallLog and its
+            # variables keep only the masked form (caller ID is the business's).
+            to_number = mask_phone(format_e164_for_call_log(phone))
             from_e164 = format_e164_for_call_log(bulk_from)
 
             variables = {k: v for k, v in context.items() if k != "phone_number"}
@@ -358,6 +391,7 @@ class CampaignCallDispatcher:
                     "bulk_provider_call_sid": provider_call_sid,
                 }
             )
+            variables = scrub_mapping(variables)
 
             call_doc: dict[str, Any] = {
                 "call_id": call_id,
@@ -453,9 +487,10 @@ class CampaignCallDispatcher:
             metadata = dict(campaign.get("orchestrator_metadata") or {})
             raw = status_result.get("raw")
             if isinstance(raw, dict):
-                metadata["bulk_status_raw"] = {
-                    k: v for k, v in raw.items() if not str(k).startswith("_")
-                }
+                # Provider status payloads can echo dialled numbers: mask them.
+                metadata["bulk_status_raw"] = scrub_mapping(
+                    {k: v for k, v in raw.items() if not str(k).startswith("_")}
+                )
             metadata["bulk_current_status"] = state or metadata.get(
                 "bulk_current_status"
             )
@@ -493,9 +528,10 @@ class CampaignCallDispatcher:
         campaign_id = str(campaign["campaign_id"])
         queued_run_id = str(queued_run["queued_run_id"])
         context = dict(queued_run.get("context_variables") or {})
+        contact_id = str(context.get("contact_id") or "").strip()
         phone_number = str(context.get("phone_number") or "").strip()
-        if not phone_number:
-            raise ValueError(f"No phone number in queued run {queued_run_id}")
+        if not contact_id and not phone_number:
+            raise ValueError(f"No contact in queued run {queued_run_id}")
 
         from_number, pool_managed = await self.acquire_from_number(
             org_id, agent_id, campaign
@@ -509,21 +545,34 @@ class CampaignCallDispatcher:
                 "campaign_id": campaign_id,
                 "source_uuid": queued_run.get("source_uuid"),
                 "caller_number": from_number,
-                "called_number": phone_number,
                 "direction": "outbound",
             }
         )
+        if phone_number:
+            variables["called_number"] = phone_number
         pool_scope = self._pool_scope(agent_id)
         slot_bound = False
         call_id: str | None = None
         try:
-            result = await initiate_outbound_call(
-                org_id,
-                agent_id,
-                phone_number,
-                from_number=from_number,
-                custom_variables=variables,
-            )
+            if contact_id:
+                # VoicEra Secure: the number is resolved inside the gateway for
+                # this dial only and never touches the queue.
+                result = await secure_gateway.dial_contact(
+                    org_id,
+                    agent_id,
+                    contact_id,
+                    from_number=from_number,
+                    custom_variables=variables,
+                    initiated_by=f"campaign:{campaign_id}",
+                )
+            else:
+                result = await initiate_outbound_call(
+                    org_id,
+                    agent_id,
+                    phone_number,
+                    from_number=from_number,
+                    custom_variables=variables,
+                )
             raw_call_id = result.get("call_id")
             call_id = str(raw_call_id).strip() if raw_call_id else None
             if call_id:

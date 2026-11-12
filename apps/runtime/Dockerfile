@@ -14,6 +14,7 @@ COPY apps/__init__.py apps/__init__.py
 COPY apps/runtime apps/runtime
 COPY apps/providers apps/providers
 COPY apps/telephony apps/telephony
+COPY apps/pii apps/pii
 
 ENV PYTHONPATH=/app
 # Bundled at build time (apps/runtime/nltk_data/) so pipeline setup never blocks

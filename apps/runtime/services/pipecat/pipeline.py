@@ -31,6 +31,8 @@ async def run_pipeline(
     stt: Any | None = None,
     tts: Any | None = None,
     llm: Any | None = None,
+    extra_tools: list[Any] | None = None,
+    aggregator_hooks: Any = None,
 ) -> None:
     """Shared Pipecat pipeline for telephony and browser WebSocket agents."""
     if stt is None or tts is None or llm is None:
@@ -67,6 +69,8 @@ async def run_pipeline(
         agent=agent,
         org_id=org_id,
         behaviour=behaviour,
+        extra_tools=extra_tools,
+        aggregator_hooks=aggregator_hooks,
     )
 
     if call_id:

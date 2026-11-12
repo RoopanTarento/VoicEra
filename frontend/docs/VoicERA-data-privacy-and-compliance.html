@@ -1,0 +1,232 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>VoicERA: data privacy and compliance</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet"><style>
+@page {size:A4;margin:0} *{box-sizing:border-box} html{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+body{margin:0;font-family:'Plus Jakarta Sans',-apple-system,'Helvetica Neue',Arial,sans-serif;color:#14161a;font-size:8.5pt;line-height:1.38;background:#fff}
+.page{width:210mm;height:297mm;padding:11mm 12mm 9mm;position:relative;overflow:hidden;page-break-after:always;background:#fbfaf7} .page:last-child{page-break-after:auto}
+.eyebrow{font-family:'IBM Plex Mono',Menlo,monospace;font-size:6.6pt;letter-spacing:.16em;text-transform:uppercase;color:#6b7280}
+h1{font-size:18.5pt;line-height:1.1;margin:1.6mm 0 2.4mm;letter-spacing:-.02em;font-weight:700} h1 em{font-style:normal;color:#1f4ee8}
+h2{font-size:10.2pt;margin:0 0 1.6mm;font-weight:700;letter-spacing:-.01em} h3{font-size:8.6pt;margin:0 0 1.2mm;font-weight:700}
+.lead{font-size:9pt;color:#4c5460;margin:0 0 3mm;max-width:170mm}
+.bl{display:grid;grid-template-columns:repeat(3,1fr);gap:2.4mm;margin:0 0 3.4mm}
+.bl div{background:#fff;border:.3mm solid #e8e4dc;border-radius:2.2mm;padding:2.4mm 2.8mm;font-size:8pt;color:#4c5460} .bl div b{display:block;color:#14161a;font-size:8.6pt;margin-bottom:.8mm}
+.fig{background:#fff;border:.3mm solid #e8e4dc;border-radius:2.6mm;padding:2mm 2.4mm;margin:0 0 3.2mm} .fig svg{width:100%;height:auto;display:block;font-family:'Plus Jakarta Sans',-apple-system,Arial,sans-serif} .cap{font-size:6.8pt;color:#6b7280;margin-top:.8mm}
+table{width:100%;border-collapse:collapse;background:#fff;border:.3mm solid #e8e4dc;border-radius:2mm;overflow:hidden;font-size:7.6pt}
+thead th{text-align:left;font-family:'IBM Plex Mono',Menlo,monospace;font-size:6pt;letter-spacing:.12em;text-transform:uppercase;color:#6b7280;font-weight:500;padding:1.6mm 2.2mm;background:#fdfcfa;border-bottom:.3mm solid #e8e4dc}
+td{padding:1.5mm 2.2mm;vertical-align:top;border-bottom:.25mm solid #f1eee8;color:#4c5460} tr:last-child td{border-bottom:0} td b{color:#14161a;font-weight:600}
+table{table-layout:fixed} thead tr,tbody tr{display:grid;grid-template-columns:var(--c)} thead th,tbody td{display:block}
+.tg{display:inline-block;font-family:'IBM Plex Mono',Menlo,monospace;font-size:5.4pt;letter-spacing:.08em;font-weight:600;padding:.4mm 1.2mm;border-radius:.8mm;margin-right:1.2mm;vertical-align:1px}
+.note{font-size:7.2pt;color:#6b7280;margin:1.8mm 0 0}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:4.5mm}
+ul.p{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:1.1mm}
+ul.p li{display:flex;gap:1.8mm;font-size:7.8pt;color:#4c5460} ul.p li::before{content:'';flex:0 0 1.3mm;height:1.3mm;border-radius:50%;background:#1f4ee8;margin-top:1.25mm} ul.n li::before{background:#d98324} ul.p li b{color:#14161a;font-weight:600}
+.box{background:#eef1fe;border:.3mm solid #dde4fc;border-radius:2.2mm;padding:2.4mm 3mm} .box h3{color:#1740c4}
+.q{margin:0;font-size:7.8pt;color:#14161a;font-style:italic;line-height:1.45}
+.foot{position:absolute;left:12mm;right:12mm;bottom:5mm;display:flex;justify-content:space-between;font-size:6.2pt;color:#8a8577;font-family:'IBM Plex Mono',Menlo,monospace;letter-spacing:.05em}
+</style></head><body><section class="page">
+<div class="eyebrow">VoicERA for government · Data privacy and compliance</div>
+<h1>Can we say it is <em>compliant?</em> Not yet. Here is why, and the way there.</h1>
+<div class="bl">
+ <div><b>1. We cannot honestly say "compliant" today.</b> The package document leaves three answers blank: where call data is stored, whether it trains models, how long it is kept.</div>
+ <div><b>2. The department stays accountable.</b> Under the DPDP Act it is the Data Fiduciary. VoicERA and Bhashini act on its behalf. Compliance is shown through contract, configuration and evidence, not a label.</div>
+ <div><b>3. What we can say is narrow, and true.</b> The department approves every word the agent speaks. No department system is connected. See the say / do not say table on page 4.</div>
+</div>
+<h2>Where personal data travels</h2>
+<div class="fig"><svg viewBox="0 0 730 262" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Where personal data travels">
+<defs><marker id="ah" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 L8 4 L0 8 z" fill="#14161a"/></marker><marker id="aw" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 L8 4 L0 8 z" fill="#d98324"/></marker></defs>
+<text x="8" y="12" font-size="6.4" text-anchor="start" fill="#6b7280" font-family="IBM Plex Mono, Menlo, monospace" letter-spacing=".9" font-weight="500">WHERE PERSONAL DATA TRAVELS ON A CALL</text>
+<rect x="8" y="22" width="92" height="86" rx="7" fill="#fff" stroke="#d9d3c8" stroke-width="1.2"/>
+<text x="16" y="36.4" font-size="9.4" font-weight="600" fill="#14161a">Citizen</text>
+<text x="16" y="48.2" font-size="7.8" fill="#4c5460">Speaks. Number</text>
+<text x="16" y="58.6" font-size="7.8" fill="#4c5460">is seen by the</text>
+<text x="16" y="69.0" font-size="7.8" fill="#4c5460">platform</text>
+<rect x="124" y="22" width="112" height="86" rx="7" fill="#fdfcfa" stroke="#d98324" stroke-width="1.2" stroke-dasharray="3 3"/>
+<text x="132" y="36" font-size="9" font-weight="600" fill="#14161a">Telephony carrier</text>
+<text x="132" y="47.6" font-size="7.6" fill="#4c5460">Carries the call.</text>
+<text x="132" y="57.8" font-size="7.6" fill="#4c5460">Sees the number</text>
+<text x="132" y="68.0" font-size="7.6" fill="#4c5460">and call timing</text>
+<rect x="260" y="22" width="160" height="86" rx="7" fill="#14161a" stroke="#14161a" stroke-width="1.2"/>
+<text x="268" y="36.4" font-size="9.4" font-weight="600" fill="#fff">VoicERA platform</text>
+<text x="268" y="48.2" font-size="7.8" fill="#d5d9e0">Hosted on Bhashini</text>
+<text x="268" y="58.6" font-size="7.8" fill="#d5d9e0">Orchestrates the call</text>
+<text x="268" y="69.0" font-size="7.8" fill="#d5d9e0">Audio and text pass through</text>
+<rect x="444" y="22" width="138" height="86" rx="7" fill="#fdfcfa" stroke="#d98324" stroke-width="1.2" stroke-dasharray="3 3"/>
+<text x="452" y="36" font-size="9" font-weight="600" fill="#14161a">Model providers</text>
+<text x="452" y="47.6" font-size="7.6" fill="#4c5460">Speech to text, language</text>
+<text x="452" y="57.8" font-size="7.6" fill="#4c5460">model, text to speech</text>
+<text x="452" y="68.0" font-size="7.6" fill="#4c5460">Sample list, not actual</text>
+<rect x="606" y="22" width="116" height="86" rx="7" fill="#eef1fe" stroke="#1f4ee8" stroke-width="1.2"/>
+<text x="614" y="36" font-size="9" font-weight="600" fill="#14161a">Department</text>
+<text x="614" y="47.6" font-size="7.6" fill="#1f4ee8">Supplies the approved</text>
+<text x="614" y="57.8" font-size="7.6" fill="#1f4ee8">script and knowledge</text>
+<text x="614" y="68.0" font-size="7.6" fill="#1f4ee8">files. No personal data</text>
+<path d="M100 62 L124 62" stroke="#14161a" stroke-width="1.2" fill="none" marker-end="url(#ah)"/>
+<path d="M236 62 L260 62" stroke="#14161a" stroke-width="1.2" fill="none" marker-end="url(#ah)"/>
+<path d="M420 62 L444 62" stroke="#d98324" stroke-width="1.2" fill="none" stroke-dasharray="3 3" marker-end="url(#aw)"/>
+<text x="8" y="138" font-size="6.4" text-anchor="start" fill="#6b7280" font-family="IBM Plex Mono, Menlo, monospace" letter-spacing=".9" font-weight="500">WHAT IS KEPT, AND WHERE IT GOES NEXT</text>
+<rect x="260" y="150" width="160" height="100" rx="7" fill="#fff" stroke="#c2410c" stroke-width="1.2" stroke-dasharray="3 3"/>
+<text x="268" y="164.2" font-size="9.2" font-weight="600" fill="#c2410c">Stored by the platform</text>
+<text x="268" y="175.79999999999998" font-size="7.6" fill="#4c5460">Recordings, if enabled</text>
+<text x="268" y="185.99999999999997" font-size="7.6" fill="#4c5460">Transcripts</text>
+<text x="268" y="196.19999999999996" font-size="7.6" fill="#4c5460">Survey answers + number</text>
+<text x="268" y="206.39999999999995" font-size="7.6" fill="#4c5460">Call metadata and logs</text>
+<text x="268" y="216.59999999999994" font-size="7.6" fill="#4c5460">Location, retention: OPEN</text>
+<path d="M340 108 L340 150" stroke="#c2410c" stroke-width="1.2" fill="none" stroke-dasharray="3 3" marker-end="url(#ah)"/>
+<rect x="444" y="150" width="138" height="100" rx="7" fill="#fff" stroke="#d9d3c8" stroke-width="1.2"/>
+<text x="452" y="164.2" font-size="9.2" font-weight="600" fill="#14161a">Dashboard and exports</text>
+<text x="452" y="175.79999999999998" font-size="7.6" fill="#4c5460">Calls attempted,</text>
+<text x="452" y="185.99999999999997" font-size="7.6" fill="#4c5460">connected, dropped,</text>
+<text x="452" y="196.19999999999996" font-size="7.6" fill="#4c5460">completed. Answers as</text>
+<text x="452" y="206.39999999999995" font-size="7.6" fill="#4c5460">a downloadable table</text>
+<path d="M420 200 L444 200" stroke="#14161a" stroke-width="1.2" fill="none" marker-end="url(#ah)"/>
+<rect x="606" y="150" width="116" height="100" rx="7" fill="#eef1fe" stroke="#1f4ee8" stroke-width="1.2"/>
+<text x="614" y="164.2" font-size="9.2" font-weight="600" fill="#14161a">Department staff</text>
+<text x="614" y="175.79999999999998" font-size="7.6" fill="#1f4ee8">Read results.</text>
+<text x="614" y="185.99999999999997" font-size="7.6" fill="#1f4ee8">Own the citizens&#x27;</text>
+<text x="614" y="196.19999999999996" font-size="7.6" fill="#1f4ee8">data. Accountable</text>
+<text x="614" y="206.39999999999995" font-size="7.6" fill="#1f4ee8">under the law</text>
+<path d="M582 200 L606 200" stroke="#14161a" stroke-width="1.2" fill="none" marker-end="url(#ah)"/>
+<rect x="8" y="150" width="232" height="100" rx="7" fill="#fdfcfa" stroke="#d98324" stroke-width="1.2"/>
+<text x="16" y="164" font-size="9" font-weight="600" fill="#a96a16">Amber and dashed = not stated</text>
+<text x="16" y="175.6" font-size="7.6" fill="#4c5460">in the package document</text>
+<text x="16" y="185.79999999999998" font-size="7.6" fill="#4c5460">Carrier, model providers, storage</text>
+<text x="16" y="195.99999999999997" font-size="7.6" fill="#4c5460">location, retention and sub-</text>
+<text x="16" y="206.19999999999996" font-size="7.6" fill="#4c5460">processors are all unconfirmed.</text>
+<text x="16" y="216.39999999999995" font-size="7.6" fill="#4c5460">Ask for each in writing.</text>
+</svg><div class="cap">Figure 1. A call, end to end. Dashed amber boxes are not stated in the package document and must be confirmed in writing.</div></div>
+<h2>What personal data a call creates</h2>
+<table style="--c:1.1fr 1.5fr 2fr"><thead><tr><th>Data</th><th>Where it appears</th><th>How personal</th></tr></thead><tbody><tr><td><b>Phone number</b></td><td>Inbound caller line. Outbound list.</td><td>Personal. Links every other item to a person.</td></tr><tr><td><b>Voice audio</b></td><td>Every call. Recordings if enabled.</td><td>Personal. Voice can identify someone.</td></tr><tr><td><b>Transcript</b></td><td>Every call.</td><td>Personal. Becomes sensitive if the citizen mentions health, income or caste.</td></tr><tr><td><b>Survey answers</b></td><td>Outbound surveys.</td><td>Personal when tied to a number. Downloadable as a table.</td></tr><tr><td><b>Eligibility details</b></td><td>Scheme discovery: age, land, income band.</td><td>Potentially sensitive. Ask only what the scheme rules need.</td></tr><tr><td><b>Call metadata</b></td><td>Time, length, language, outcome.</td><td>Personal when tied to a number.</td></tr><tr><td><b>Staff accounts</b></td><td>Dashboard users.</td><td>Staff personal data. Needs access control.</td></tr><tr><td><b>Knowledge files</b></td><td>Scheme text from the department.</td><td>Not personal. Must never contain personal data.</td></tr></tbody></table>
+<p class="note">Design choice in this experience: the agent never asks for identity numbers, bank details, passwords or one-time codes. Whether the live platform enforces this is something to test, not assume.</p>
+<div class="foot"><span>VOICERA · DATA PRIVACY AND COMPLIANCE · 13 OCT 2026</span><span>1 / 4</span></div>
+</section><section class="page">
+<div class="eyebrow">The data lifecycle</div>
+<h1 style="font-size:17pt">Eight stages. Most are open.</h1>
+<p class="lead">Every stage in the life of a citizen's data needs an owner and an answer. Today only collection, notice and sharing have a clear owner. The rest wait on written answers from VoicEra and Bhashini.</p>
+<div class="fig"><svg viewBox="0 0 730 112" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Personal data lifecycle">
+<defs><marker id="a2" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 L8 4 L0 8 z" fill="#14161a"/></marker></defs>
+<rect x="8.0" y="10" width="78" height="74" rx="7" fill="#fff" stroke="#d9d3c8" stroke-width="1.2"/>
+<circle cx="19.0" cy="22" r="7" fill="#14161a"/><text x="19.0" y="24.6" font-size="7.6" fill="#fff" text-anchor="middle" font-family="IBM Plex Mono, Menlo, monospace">1</text>
+<text x="14.0" y="42" font-size="8.6" font-weight="600" fill="#14161a">Collect</text>
+<text x="14.0" y="52.6" font-size="7" fill="#4c5460">only what is needed</text>
+<rect x="8.0" y="90" width="78" height="14" rx="3" fill="#eef1fe"/><text x="47.0" y="100" font-size="6.4" text-anchor="middle" fill="#1740c4" font-family="IBM Plex Mono, Menlo, monospace" letter-spacing=".8">YOUR CALL</text>
+<rect x="98.9" y="10" width="78" height="74" rx="7" fill="#fff" stroke="#d9d3c8" stroke-width="1.2"/>
+<circle cx="109.9" cy="22" r="7" fill="#14161a"/><text x="109.9" y="24.6" font-size="7.6" fill="#fff" text-anchor="middle" font-family="IBM Plex Mono, Menlo, monospace">2</text>
+<text x="104.9" y="42" font-size="8.6" font-weight="600" fill="#14161a">Notice and</text>
+<text x="104.9" y="51.6" font-size="8.6" font-weight="600" fill="#14161a">consent</text>
+<text x="104.9" y="62.2" font-size="7" fill="#4c5460">before collecting</text>
+<rect x="98.9" y="90" width="78" height="14" rx="3" fill="#eef1fe"/><text x="137.9" y="100" font-size="6.4" text-anchor="middle" fill="#1740c4" font-family="IBM Plex Mono, Menlo, monospace" letter-spacing=".8">YOUR CALL</text>
+<rect x="189.7" y="10" width="78" height="74" rx="7" fill="#fff" stroke="#d9d3c8" stroke-width="1.2"/>
+<circle cx="200.7" cy="22" r="7" fill="#14161a"/><text x="200.7" y="24.6" font-size="7.6" fill="#fff" text-anchor="middle" font-family="IBM Plex Mono, Menlo, monospace">3</text>
+<text x="195.7" y="42" font-size="8.6" font-weight="600" fill="#14161a">Process</text>
+<text x="195.7" y="52.6" font-size="7" fill="#4c5460">who sees it</text>
+<rect x="189.7" y="90" width="78" height="14" rx="3" fill="#fef7ec"/><text x="228.7" y="100" font-size="6.4" text-anchor="middle" fill="#a96a16" font-family="IBM Plex Mono, Menlo, monospace" letter-spacing=".8">OPEN</text>
+<rect x="280.6" y="10" width="78" height="74" rx="7" fill="#fff" stroke="#d9d3c8" stroke-width="1.2"/>
+<circle cx="291.6" cy="22" r="7" fill="#14161a"/><text x="291.6" y="24.6" font-size="7.6" fill="#fff" text-anchor="middle" font-family="IBM Plex Mono, Menlo, monospace">4</text>
+<text x="286.6" y="42" font-size="8.6" font-weight="600" fill="#14161a">Store</text>
+<text x="286.6" y="52.6" font-size="7" fill="#4c5460">where, how safely</text>
+<rect x="280.6" y="90" width="78" height="14" rx="3" fill="#fef7ec"/><text x="319.6" y="100" font-size="6.4" text-anchor="middle" fill="#a96a16" font-family="IBM Plex Mono, Menlo, monospace" letter-spacing=".8">OPEN</text>
+<rect x="371.4" y="10" width="78" height="74" rx="7" fill="#fff" stroke="#d9d3c8" stroke-width="1.2"/>
+<circle cx="382.4" cy="22" r="7" fill="#14161a"/><text x="382.4" y="24.6" font-size="7.6" fill="#fff" text-anchor="middle" font-family="IBM Plex Mono, Menlo, monospace">5</text>
+<text x="377.4" y="42" font-size="8.6" font-weight="600" fill="#14161a">Retain</text>
+<text x="377.4" y="52.6" font-size="7" fill="#4c5460">how long</text>
+<rect x="371.4" y="90" width="78" height="14" rx="3" fill="#fef7ec"/><text x="410.4" y="100" font-size="6.4" text-anchor="middle" fill="#a96a16" font-family="IBM Plex Mono, Menlo, monospace" letter-spacing=".8">OPEN</text>
+<rect x="462.3" y="10" width="78" height="74" rx="7" fill="#fff" stroke="#d9d3c8" stroke-width="1.2"/>
+<circle cx="473.3" cy="22" r="7" fill="#14161a"/><text x="473.3" y="24.6" font-size="7.6" fill="#fff" text-anchor="middle" font-family="IBM Plex Mono, Menlo, monospace">6</text>
+<text x="468.3" y="42" font-size="8.6" font-weight="600" fill="#14161a">Share and</text>
+<text x="468.3" y="51.6" font-size="8.6" font-weight="600" fill="#14161a">export</text>
+<text x="468.3" y="62.2" font-size="7" fill="#4c5460">who gets it</text>
+<rect x="462.3" y="90" width="78" height="14" rx="3" fill="#fef7ec"/><text x="501.3" y="100" font-size="6.4" text-anchor="middle" fill="#a96a16" font-family="IBM Plex Mono, Menlo, monospace" letter-spacing=".8">OPEN</text>
+<rect x="553.1" y="10" width="78" height="74" rx="7" fill="#fff" stroke="#d9d3c8" stroke-width="1.2"/>
+<circle cx="564.1" cy="22" r="7" fill="#14161a"/><text x="564.1" y="24.6" font-size="7.6" fill="#fff" text-anchor="middle" font-family="IBM Plex Mono, Menlo, monospace">7</text>
+<text x="559.1" y="42" font-size="8.6" font-weight="600" fill="#14161a">Rights and</text>
+<text x="559.1" y="51.6" font-size="8.6" font-weight="600" fill="#14161a">deletion</text>
+<text x="559.1" y="62.2" font-size="7" fill="#4c5460">on request</text>
+<rect x="553.1" y="90" width="78" height="14" rx="3" fill="#fef7ec"/><text x="592.1" y="100" font-size="6.4" text-anchor="middle" fill="#a96a16" font-family="IBM Plex Mono, Menlo, monospace" letter-spacing=".8">OPEN</text>
+<rect x="644.0" y="10" width="78" height="74" rx="7" fill="#fff" stroke="#d9d3c8" stroke-width="1.2"/>
+<circle cx="655.0" cy="22" r="7" fill="#14161a"/><text x="655.0" y="24.6" font-size="7.6" fill="#fff" text-anchor="middle" font-family="IBM Plex Mono, Menlo, monospace">8</text>
+<text x="650.0" y="42" font-size="8.6" font-weight="600" fill="#14161a">Breach</text>
+<text x="650.0" y="52.6" font-size="7" fill="#4c5460">tell the right people</text>
+<rect x="644.0" y="90" width="78" height="14" rx="3" fill="#fef7ec"/><text x="683.0" y="100" font-size="6.4" text-anchor="middle" fill="#a96a16" font-family="IBM Plex Mono, Menlo, monospace" letter-spacing=".8">OPEN</text>
+<path d="M86.0 47 L97.9 47" stroke="#14161a" stroke-width="1.1" marker-end="url(#a2)"/>
+<path d="M176.9 47 L188.7 47" stroke="#14161a" stroke-width="1.1" marker-end="url(#a2)"/>
+<path d="M267.7 47 L279.6 47" stroke="#14161a" stroke-width="1.1" marker-end="url(#a2)"/>
+<path d="M358.6 47 L370.4 47" stroke="#14161a" stroke-width="1.1" marker-end="url(#a2)"/>
+<path d="M449.4 47 L461.3 47" stroke="#14161a" stroke-width="1.1" marker-end="url(#a2)"/>
+<path d="M540.3 47 L552.1 47" stroke="#14161a" stroke-width="1.1" marker-end="url(#a2)"/>
+<path d="M631.1 47 L643.0 47" stroke="#14161a" stroke-width="1.1" marker-end="url(#a2)"/>
+</svg><div class="cap">Figure 2. Blue means the department decides. Amber means open until VoicEra or Bhashini confirms in writing.</div></div>
+<table style="--c:1.05fr 2.3fr 2.1fr"><thead><tr><th>Stage</th><th>What good looks like</th><th>Where it stands</th></tr></thead><tbody><tr><td><b>1 Collect</b></td><td>Collect only what the scheme or survey needs. Outbound: lawful basis and a clean list.</td><td><span class="tg" style="background:#eef1fe;color:#1740c4">YOUR CALL</span> Department decides. Platinum expects the department to supply the phone list.</td></tr><tr><td><b>2 Notice and consent</b></td><td>Say who is calling, why, what is recorded, how long, and how to ask for a person or deletion. Before collecting anything.</td><td><span class="tg" style="background:#eef1fe;color:#1740c4">YOUR CALL</span> Wording is the department's. A sample is on page 4.</td></tr><tr><td><b>3 Process</b></td><td>Use data only for the stated purpose. Know every party that sees audio or text.</td><td><span class="tg" style="background:#fef7ec;color:#a96a16">OPEN</span> Which carrier and model providers see what is not stated. The document lists samples only.</td></tr><tr><td><b>4 Store</b></td><td>Known location, encryption, restricted access, activity logs.</td><td><span class="tg" style="background:#fef7ec;color:#a96a16">OPEN</span> Location is blank. Encryption and access are not described.</td></tr><tr><td><b>5 Retain</b></td><td>A written schedule per data type. Delete when the purpose is served, unless a law requires keeping it.</td><td><span class="tg" style="background:#fef7ec;color:#a96a16">OPEN</span> Retention is blank.</td></tr><tr><td><b>6 Share and export</b></td><td>Role-based access. Exports only to named people. No onward sharing outside the purpose.</td><td><span class="tg" style="background:#e6f6ef;color:#0b7a53">DOCUMENTED</span> Dashboard and downloadable dataset are documented. Roles are not.</td></tr><tr><td><b>7 Rights and deletion</b></td><td>A route for citizens to see, correct and erase their data, and to complain, with a named contact.</td><td><span class="tg" style="background:#fef7ec;color:#a96a16">OPEN</span> Deletion on request is not described.</td></tr><tr><td><b>8 Breach</b></td><td>A tested plan: who decides, who is told, how fast.</td><td><span class="tg" style="background:#fef7ec;color:#a96a16">OPEN</span> Not described. Page 3 lists the clocks that apply.</td></tr></tbody></table>
+<div class="two" style="margin-top:3.4mm">
+ <div class="box"><h3>Retention: what to settle</h3>
+  <ul class="p">
+   <li><span><b>Set a schedule per data type:</b> audio, transcript, survey dataset, logs. Do not accept "kept as long as needed".</span></li>
+   <li><span><b>Default to keeping less.</b> If you do not need recordings, choose transcript only, or neither.</span></li>
+   <li><span><b>Logs have their own clock.</b> Security logs may have to be kept for a fixed period under other rules (page 3).</span></li>
+   <li><span><b>Test deletion once,</b> with a real record, before launch.</span></li>
+  </ul></div>
+ <div class="box"><h3>Transparency: what to publish</h3>
+  <ul class="p">
+   <li><span><b>A plain privacy notice</b> on the department site and read at the start of every call.</span></li>
+   <li><span><b>A register of processing:</b> what data, why, who sees it, how long.</span></li>
+   <li><span><b>The list of processors</b> and sub-processors, with where each is.</span></li>
+   <li><span><b>A named grievance contact</b> and how fast it replies.</span></li>
+  </ul></div>
+</div>
+<div class="foot"><span>VOICERA · DATA PRIVACY AND COMPLIANCE · 13 OCT 2026</span><span>2 / 4</span></div>
+</section><section class="page">
+<div class="eyebrow">The law and the standards</div>
+<h1 style="font-size:17pt">What each framework asks, and where we stand</h1>
+<p class="lead">This is a plain-language reading to help you ask the right questions. It is not legal advice. Laws and rules change and commence in phases, so confirm the current position with your legal counsel.</p>
+<table style="--c:1.25fr 2.45fr 2.35fr"><thead><tr><th>Framework</th><th>What it asks</th><th>What it means here</th></tr></thead><tbody><tr><td><b>DPDP Act 2023</b> and DPDP Rules 2025</td><td>Notice and consent, or a listed lawful use. Purpose limits. Reasonable security. Erase when the purpose ends. Tell the Board and citizens about a breach. Rights to access, correct, erase, complain. The fiduciary answers for its processors and needs a contract with them.</td><td>The department is the Data Fiduciary. Check which lawful use applies to scheme-information and survey calls. Rules commence in phases, so confirm the dates that apply to you.</td></tr><tr><td><b>IT Act 2000</b> and <b>CERT-In directions 2022</b></td><td>Report cyber incidents within 6 hours. Keep system logs for a rolling 180 days, within India.</td><td>Needs an incident route, and log storage in India. Ask where VoicERA and Bhashini keep logs.</td></tr><tr><td><b>Telecom rules for calls</b> (TRAI, Telecom Act 2023)</td><td>Rules on commercial and unsolicited calls, registered senders, and do-not-disturb preferences.</td><td>Outbound campaigns: have your legal team classify each call type, and set calling hours and opt-out. Not in the package.</td></tr><tr><td><b>Aadhaar Act</b></td><td>Limits on collecting and storing Aadhaar numbers.</td><td>Do not collect identity numbers by voice. Keep that out of every script.</td></tr><tr><td><b>Government hosting rules</b> (MeitY cloud empanelment, data residency)</td><td>Government data on approved infrastructure, usually within India.</td><td>The package is hosted on Bhashini. Ask for written confirmation that it meets your department's hosting rule.</td></tr><tr><td><b>Digital Public Goods Standard</b> (DPGA)</td><td>A standard, not an Act: open licence, clear ownership, platform independence, documentation, data export, privacy and law, good practice, do no harm.</td><td>Relevant if the department wants VoicERA treated as a public good. See the self-check below.</td></tr><tr><td><b>DPI principles</b></td><td>Open, interoperable, consent-based data exchange.</td><td>Direction of travel for the ICP's integration depth. No department integration in Platinum, so nothing to claim yet.</td></tr></tbody></table>
+<h2 style="margin-top:3.4mm">Digital Public Goods: a quick self-check</h2>
+<table style="--c:1.4fr 3.6fr 1.1fr"><thead><tr><th>DPG indicator</th><th>Prompt</th><th>Status</th></tr></thead><tbody><tr><td>Open licence and ownership</td><td>The ICP positions VoicERA as open and sovereign. Licence and ownership are not in the supplied documents.</td><td><span class="tg" style="background:#fef7ec;color:#a96a16">OPEN</span></td></tr><tr><td>Platform independence</td><td>The ICP says model and telephony agnostic. The actual model list is a sample.</td><td><span class="tg" style="background:#fef7ec;color:#a96a16">NEEDS EVIDENCE</span></td></tr><tr><td>Documentation and data export</td><td>Dashboard and a downloadable dataset are documented.</td><td><span class="tg" style="background:#e6f6ef;color:#0b7a53">DOCUMENTED</span></td></tr><tr><td>Privacy and applicable laws</td><td>Needs the answers on pages 2 and 4.</td><td><span class="tg" style="background:#fdece3;color:#c2410c">NOT YET</span></td></tr><tr><td>Do no harm by design</td><td>Emergency redirect and no sensitive identifiers are design choices in this experience. Test on the live platform.</td><td><span class="tg" style="background:#fef7ec;color:#a96a16">NEEDS EVIDENCE</span></td></tr></tbody></table>
+<p class="note">There is no "DPG Act". Digital Public Good is a recognition under a standard run by the Digital Public Goods Alliance. DPDP is the data protection law.</p>
+<div class="foot"><span>VOICERA · DATA PRIVACY AND COMPLIANCE · 13 OCT 2026</span><span>3 / 4</span></div>
+</section><section class="page">
+<div class="eyebrow">So how do we say it is compliant?</div>
+<h1 style="font-size:17pt">Say less now. Earn the rest with evidence.</h1>
+<p class="lead">"Compliant" is a result, not a feature. You get there by collecting proof for each obligation, then describing only what the proof supports.</p>
+<table style="--c:1fr 1fr 1fr"><thead><tr><th>Say, because it is true now</th><th>Say only with evidence</th><th>Do not say</th></tr></thead><tbody><tr><td>The department approves the script and knowledge files before setup.</td><td>"Call data is stored in India." Needs a hosting letter.</td><td>"VoicERA is DPDP compliant."</td></tr><tr><td>No department system is connected in Platinum, so no direct access to your databases.</td><td>"Call data is not used to train models." Needs a written commitment.</td><td>"Your data is secure." Without an assessment report.</td></tr><tr><td>It is hosted on Bhashini and billed to Bhashini.</td><td>"Recordings are deleted after N days." Needs a tested procedure.</td><td>"It is a Digital Public Good." Until recognised.</td></tr><tr><td>VoicERA does not commit model output quality.</td><td>"We notify you of a breach within X hours." Needs a runbook.</td><td>"Citizens' consent is handled." It is the department's job.</td></tr></tbody></table>
+<div class="two" style="margin-top:3.2mm">
+ <div>
+  <h2>Evidence to collect before you claim anything</h2>
+  <ul class="p">
+   <li><span><b>A processing agreement</b> with Bhashini and VoicEra that names purpose, security, deletion and breach duties</span></li>
+   <li><span><b>A data-flow diagram</b> and the full list of sub-processors, with locations</span></li>
+   <li><span><b>A hosting letter</b> on residency and approved infrastructure</span></li>
+   <li><span><b>Security description:</b> encryption, access, activity logs, plus an independent test report</span></li>
+   <li><span><b>A retention schedule</b> and a deletion test with a real record</span></li>
+   <li><span><b>A breach runbook</b> and who calls whom</span></li>
+   <li><span><b>A privacy impact assessment</b> for scheme and survey calls</span></li>
+   <li><span><b>The notice wording,</b> reviewed by counsel, and a recording showing it is played</span></li>
+  </ul>
+ </div>
+ <div>
+  <h2>Ask VoicEra and Bhashini in writing</h2>
+  <ul class="p n">
+   <li><span>Where are call audio, transcripts and answers stored, and who can access them?</span></li>
+   <li><span>Which providers see audio or text, and where are they?</span></li>
+   <li><span>Is any call data used to train or improve a model?</span></li>
+   <li><span>How long is each data type kept, and can we set it?</span></li>
+   <li><span>How is a citizen's data deleted on request, and how fast?</span></li>
+   <li><span>What is your breach process and notice time?</span></li>
+   <li><span>What security testing has been done, by whom?</span></li>
+   <li><span>What is the licence, and is DPG recognition planned?</span></li>
+  </ul>
+  <div class="box" style="margin-top:2.4mm"><h3>A sample notice, 10 seconds. Needs legal review.</h3>
+   <p class="q">"This is an automated assistant for [Department]. We use what you tell us to [purpose]. This call may be recorded and kept for [period]. You can ask for a person, or ask us to delete your data, at [contact]."</p></div>
+ </div>
+</div>
+<div class="box" style="margin-top:3mm"><h3>What to confirm exists before this claim is easy</h3>
+ <ul class="p" style="display:grid;grid-template-columns:1fr 1fr;gap:1mm 6mm">
+  <li><span><b>Retention and deletion controls</b> per data type, confirmed in writing</span></li>
+  <li><span><b>Consent and notice records</b> kept with each call</span></li>
+  <li><span><b>Fine-grained roles and an audit log</b> of who saw what</span></li>
+  <li><span><b>Outbound controls:</b> calling hours, opt-out and do-not-disturb handling</span></li>
+  <li><span><b>Authenticated, encrypted media connections,</b> confirmed in writing</span></li>
+  <li><span><b>A processing-agreement template</b> and a published processor list</span></li>
+ </ul>
+ <p class="note" style="margin:1.4mm 0 0">None of these is described in the supplied package document. Ask whether each exists in the managed Platinum service.</p>
+</div>
+<div class="foot"><span>VOICERA · DATA PRIVACY AND COMPLIANCE · 13 OCT 2026</span><span>4 / 4</span></div>
+</section></body></html>

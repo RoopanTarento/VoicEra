@@ -21,13 +21,21 @@ export type CallListQuery = {
   call_response?: string;
   created_after?: string;
   created_before?: string;
+  /** Local days (India time), both inclusive — YYYY-MM-DD. */
+  date_from?: string;
+  date_to?: string;
+  /** camelCase aliases used by Campaign analysis. */
+  campaignId?: string;
+  dateFrom?: string;
+  dateTo?: string;
 };
 
 function buildCallListQuery(params: CallListQuery): string {
   const q = new URLSearchParams();
   if (params.limit != null) q.set("limit", String(params.limit));
   if (params.offset != null) q.set("offset", String(params.offset));
-  if (params.campaign_id) q.set("campaign_id", params.campaign_id);
+  const campaignId = params.campaign_id ?? params.campaignId;
+  if (campaignId) q.set("campaign_id", campaignId);
   if (params.exclude_campaign) q.set("exclude_campaign", "true");
   if (params.agent_id) q.set("agent_id", params.agent_id);
   if (params.status && params.status !== "all") q.set("status", params.status);
@@ -35,6 +43,11 @@ function buildCallListQuery(params: CallListQuery): string {
   if (params.call_response) q.set("call_response", params.call_response);
   if (params.created_after) q.set("created_after", params.created_after);
   if (params.created_before) q.set("created_before", params.created_before);
+  // Local days (India time), both inclusive.
+  const dateFrom = params.date_from ?? params.dateFrom;
+  const dateTo = params.date_to ?? params.dateTo;
+  if (dateFrom) q.set("date_from", dateFrom);
+  if (dateTo) q.set("date_to", dateTo);
   const s = q.toString();
   return s ? `?${s}` : "";
 }
@@ -123,4 +136,9 @@ export async function getCallMetrics(callId: string): Promise<CallMetricsRespons
 /** All-time org call analytics — total calls, average duration, most-used agent. */
 export async function getOrgCallAnalytics(orgId: string): Promise<CallAnalyticsResponse> {
   return apiFetch<CallAnalyticsResponse>(`/calls/org/${encodeURIComponent(orgId)}/analytics`);
+}
+
+/** Run (or re-run) the analysis of a finished call from its transcript. */
+export async function analyzeCall(callId: string): Promise<CallLogItem> {
+  return apiFetch<CallLogItem>(`/calls/${encodeURIComponent(callId)}/analyze`, { method: "POST" });
 }

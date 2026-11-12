@@ -15,6 +15,7 @@ COPY apps/api/ .
 COPY apps/__init__.py apps/__init__.py
 COPY apps/providers apps/providers
 COPY apps/telephony apps/telephony
+COPY apps/pii apps/pii
 
 EXPOSE 8000
 

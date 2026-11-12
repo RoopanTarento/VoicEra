@@ -4,14 +4,14 @@ import { useCallback, useEffect, useState } from "react";
 import {
   createCampaign,
   deleteCampaign,
+  duplicateCampaign,
   listCampaigns,
   pauseCampaign,
   redialCampaign,
   resumeCampaign,
   startCampaign,
-  uploadCampaignCsv,
 } from "@/lib/api/campaigns";
-import type { CampaignApiResponse, CampaignCsvUploadResponse, CreateCampaignPayload } from "@/lib/api-types";
+import type { CampaignApiResponse, CreateCampaignPayload } from "@/lib/api-types";
 
 const POLL_INTERVAL_MS = 5000;
 
@@ -19,7 +19,6 @@ export function useCampaigns(onNotify: (title: string, note: string) => void) {
   const [campaigns, setCampaigns] = useState<CampaignApiResponse[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
-  const [uploading, setUploading] = useState(false);
   const [creating, setCreating] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
 
@@ -48,18 +47,6 @@ export function useCampaigns(onNotify: (title: string, note: string) => void) {
     const id = window.setInterval(load, POLL_INTERVAL_MS);
     return () => window.clearInterval(id);
   }, [hasActive, load]);
-
-  async function uploadCsv(file: File): Promise<CampaignCsvUploadResponse | null> {
-    setUploading(true);
-    try {
-      return await uploadCampaignCsv(file);
-    } catch (err) {
-      onNotify("Couldn't upload CSV", err instanceof Error ? err.message : "Something went wrong.");
-      return null;
-    } finally {
-      setUploading(false);
-    }
-  }
 
   async function create(payload: CreateCampaignPayload): Promise<boolean> {
     setCreating(true);
@@ -117,19 +104,33 @@ export function useCampaigns(onNotify: (title: string, note: string) => void) {
     }
   }
 
+  async function duplicate(campaignId: string, name?: string): Promise<boolean> {
+    setBusyId(campaignId);
+    try {
+      const copy = await duplicateCampaign(campaignId, name);
+      setCampaigns((prev) => [copy, ...prev]);
+      onNotify("Campaign duplicated", `${copy.name} is ready to start.`);
+      return true;
+    } catch (err) {
+      onNotify("Couldn't duplicate campaign", err instanceof Error ? err.message : "Something went wrong.");
+      return false;
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   return {
     campaigns,
     loading,
     loadError,
-    uploading,
     creating,
     busyId,
-    uploadCsv,
     create,
     start,
     pause,
     resume,
     redial,
+    duplicate,
     remove,
     reload: load,
   };

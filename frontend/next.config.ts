@@ -42,6 +42,10 @@ const nextConfig: NextConfig = {
         source: "/agent/:orgId/:agentId",
         destination: `${runtimeProxyTarget}/agent/:orgId/:agentId`,
       },
+      {
+        source: "/copilot-agent/:sessionId",
+        destination: `${runtimeProxyTarget}/copilot-agent/:sessionId`,
+      },
     ];
   },
 };
