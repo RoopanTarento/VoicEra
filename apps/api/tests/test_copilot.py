@@ -1728,6 +1728,81 @@ async def test_engine_retries_a_round_the_provider_aborts_mid_stream(fake_mongo,
     assert "**Grievance Bot**" in events[-1]["text"]
 
 
+def test_written_out_draft_is_recognised_but_ordinary_answers_are_not():
+    written = (
+        "Here's a draft for you to review.\n\n**Agent name:** Kisan Advisor\n**Purpose:** Answer PM-KISAN "
+        "questions\n**Primary language:** Kannada\n**Greeting:** Namaskara!"
+    )
+    assert engine._looks_like_written_draft(written) is True
+    assert engine._looks_like_written_draft("You have 2 agents: Farmer Support and Grievance Bot.") is False
+    assert engine._looks_like_written_draft("Which language should the agent speak?") is False
+
+
+@pytest.mark.asyncio
+async def test_draft_written_as_text_is_sent_back_once_to_make_a_real_card(fake_mongo, monkeypatch):
+    monkeypatch.setattr(engine.settings, "COPILOT_LLM_API_KEY", "test-key")
+    written = (
+        "Here's a draft.\n\n**Agent name:** Grievance Bot\n**Purpose:** log citizen complaints\n"
+        "**Primary language:** Hindi"
+    )
+    args = json.dumps({"name": "Grievance Bot", "purpose": "log citizen complaints", "primary_language": "hi"})
+    fake_cls = _fake_openai_factory(
+        [
+            [_content_chunk(written), _content_chunk(None, finish_reason="stop")],
+            [
+                _tool_call_chunk(0, call_id="call_1", name="propose_create_agent", arguments=args),
+                _tool_call_chunk(0, finish_reason="tool_calls"),
+            ],
+        ]
+    )
+    monkeypatch.setattr(engine, "AsyncOpenAI", fake_cls)
+
+    events = _parse_sse_events([
+        line
+        async for line in engine.run_copilot_turn(
+            org_id="org-a",
+            user_email="alice@example.com",
+            role="admin",
+            message="Create a Hindi grievance-logging agent",
+            conversation_id=None,
+            context=None,
+        )
+    ])
+    assert len(fake_cls.completions.calls) == 2
+    second_round = fake_cls.completions.calls[1]["messages"]
+    assert any(m.get("role") == "user" and m.get("content") == engine._DRAFT_NUDGE for m in second_round)
+    assert fake_mongo["CopilotAgentDrafts"].count_documents({}) == 1
+    final = events[-1]["text"]
+    assert final.startswith("Here's a draft.")  # what the user already saw is kept
+    assert "Create agent" in final
+
+
+@pytest.mark.asyncio
+async def test_draft_nudge_happens_only_once(fake_mongo, monkeypatch):
+    monkeypatch.setattr(engine.settings, "COPILOT_LLM_API_KEY", "test-key")
+    written = "Draft below.\n**Agent name:** X\n**Purpose:** Y\n**Greeting:** Hi"
+    fake_cls = _fake_openai_factory(
+        [
+            [_content_chunk(written), _content_chunk(None, finish_reason="stop")],
+            [_content_chunk(written), _content_chunk(None, finish_reason="stop")],
+        ]
+    )
+    monkeypatch.setattr(engine, "AsyncOpenAI", fake_cls)
+
+    [
+        line
+        async for line in engine.run_copilot_turn(
+            org_id="org-a",
+            user_email="alice@example.com",
+            role="admin",
+            message="Make me an agent",
+            conversation_id=None,
+            context=None,
+        )
+    ]
+    assert len(fake_cls.completions.calls) == 2
+
+
 # ---------------------------------------------------------------------------
 # Voice mode: session lifecycle, internal bundle/tool/turn endpoints
 # ---------------------------------------------------------------------------

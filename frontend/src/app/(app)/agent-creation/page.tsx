@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { CheckCircle2, Clock, MessageSquare, Phone, Settings, User } from "lucide-react";
+import { ArrowRight, CheckCircle2, Clock, MessageSquare, Phone, Settings, User } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { StartStep } from "@/components/wizard/StartStep";
 import { QuickAgentFlow } from "@/components/wizard/QuickAgentFlow";
@@ -56,18 +57,28 @@ export default function AgentCreationPage() {
 }
 
 /** An organisation's first agent gets the short guided flow (department →
- * schemes → agent → language); from the second agent on, or with ?full=1,
- * it's the full wizard. */
+ * schemes → agent → language); from the second agent on it's the full
+ * wizard. ?quick=1 asks for the short flow anyway, ?full=1 for the wizard. */
 function FlowChooser() {
   const [flow, setFlow] = useState<"checking" | "quick" | "full">("checking");
+  const [firstAgent, setFirstAgent] = useState(false);
   const { notify, toastNode } = useToast();
 
   useEffect(() => {
     let cancelled = false;
-    const wantsFull = new URLSearchParams(window.location.search).get("full") === "1";
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("quick") === "1") {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- reading the URL once on mount
+      setFlow("quick");
+      return;
+    }
+    const wantsFull = params.get("full") === "1";
     (wantsFull ? Promise.resolve(null) : listAgents())
       .then((agents) => {
-        if (!cancelled) setFlow(agents && agents.length === 0 ? "quick" : "full");
+        if (cancelled) return;
+        const none = Boolean(agents && agents.length === 0);
+        setFirstAgent(none);
+        setFlow(none ? "quick" : "full");
       })
       .catch(() => {
         if (!cancelled) setFlow("full");
@@ -87,7 +98,7 @@ function FlowChooser() {
   if (flow === "quick") {
     return (
       <>
-        <QuickAgentFlow onNotify={notify} />
+        <QuickAgentFlow onNotify={notify} firstAgent={firstAgent} />
         {toastNode}
       </>
     );
@@ -194,7 +205,21 @@ function AgentCreation() {
           ) : null}
 
           {currentId === "start" ? (
-            <StartStep onStartScratch={() => setStep(1)} onPickUseCase={pickUseCase} />
+            <>
+              <Link
+                href="/agent-creation?quick=1"
+                className="flex items-center justify-between gap-3 rounded-v-md border border-v-line bg-v-pale/40 px-4 py-3 transition-colors hover:border-v-accent"
+              >
+                <span className="flex flex-col gap-0.5">
+                  <span className="text-[13.5px] font-semibold text-v-fg">Quick scheme agent</span>
+                  <span className="text-[12.5px] text-v-muted">
+                    Four steps: schemes, your agent, language, ready. Every technical setting gets a sensible default.
+                  </span>
+                </span>
+                <ArrowRight className="size-4 shrink-0 text-v-accent" strokeWidth={2} />
+              </Link>
+              <StartStep onStartScratch={() => setStep(1)} onPickUseCase={pickUseCase} />
+            </>
           ) : null}
 
           {catalogs.loading && currentId !== "start" ? (

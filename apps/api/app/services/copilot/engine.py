@@ -133,6 +133,12 @@ but don't gate an ordinary clear request behind unneeded questions; the card
 itself is where the user reviews and adjusts. Never claim you already
 created something.
 
+Drafts go through the tool, never into your message: once you know who the
+agent serves and what it does, call propose_create_agent. Writing the draft
+out as text (name, purpose, prompt in a message) gives the user nothing they
+can save. Don't ask for a name, greeting or prompt wording: write them
+yourself, mark them 'inferred', and let the user change them on the card.
+
 Always write a real, complete system_prompt (never a generic one-liner):
 who the agent is and its tone, its concrete tasks, at least one
 domain-appropriate boundary (e.g. an EMI agent never gives financial/legal
@@ -310,6 +316,23 @@ _DRAFT_REPLIES = {
         "**Create campaign** to save it."
     ),
 }
+
+
+# gpt-oss-120b sometimes writes an agent draft out in its reply instead of
+# calling propose_create_agent (seen 19 Nov 2026 on Groq, after two lookups
+# and a rate-limit wait), which leaves the user nothing they can save. A reply
+# that reads like a draft gets sent back once with this instruction.
+_WRITTEN_DRAFT_MARKERS = ("agent name", "name:", "purpose:", "greeting", "system prompt", "primary language", "draft")
+_DRAFT_NUDGE = (
+    "You wrote the agent draft out as text, so the user has nothing they can save. Call "
+    "propose_create_agent now with that same draft (fill in anything missing yourself and mark it "
+    "'inferred'). Don't repeat the draft in your message."
+)
+
+
+def _looks_like_written_draft(text: str) -> bool:
+    lowered = text.lower()
+    return "draft" in lowered and sum(marker in lowered for marker in _WRITTEN_DRAFT_MARKERS) >= 3
 
 
 def _draft_reply(tool: str, result: dict[str, Any]) -> str:
@@ -861,7 +884,10 @@ async def run_copilot_turn(
     reasoning = _reasoning_kwargs(provider, model)
 
     try:
-        for _ in range(max(1, settings.COPILOT_MAX_TOOL_ITERATIONS)):
+        drafted = nudged = False
+        written_draft = ""  # the text the user already saw before a nudge
+        iterations = max(1, settings.COPILOT_MAX_TOOL_ITERATIONS)
+        for iteration in range(iterations):
             # Groq can abort a stream partway with "Failed to parse tool call
             # arguments as JSON" (gpt-oss writing a malformed draft). That
             # surfaces while reading the stream, after _create_completion_with_
@@ -992,12 +1018,25 @@ async def run_copilot_turn(
                     )
                     if ok and name in _DRAFT_REPLIES and isinstance(result.get("draft_id"), str):
                         draft_reply = _draft_reply(name, result)
+                        drafted = True
                 if draft_reply:
                     final_content = (accumulated + "\n\n" if accumulated.strip() else "") + draft_reply
                     yield _sse({"type": "token", "text": ("\n\n" if accumulated.strip() else "") + draft_reply})
                     break
                 continue
 
+            if (
+                not drafted
+                and not nudged
+                and iteration < iterations - 1
+                and _looks_like_written_draft(accumulated)
+            ):
+                nudged = True
+                written_draft = accumulated
+                messages.append({"role": "assistant", "content": accumulated})
+                messages.append({"role": "user", "content": _DRAFT_NUDGE})
+                yield _sse({"type": "token", "text": "\n\n"})
+                continue
             final_content = accumulated
             if not final_content.strip() and finish_reason == "length":
                 # The whole budget went before any answer: say so instead of
@@ -1013,6 +1052,9 @@ async def run_copilot_turn(
                 "I had to stop after several tool lookups without reaching a clear answer. "
                 "Try narrowing your question (e.g. a specific agent or time range)."
             )
+        if written_draft:
+            # Keep what was streamed before the nudge, so the saved chat matches the screen.
+            final_content = f"{written_draft}\n\n{final_content}"
     except CopilotConfigurationError as exc:
         yield _sse({"type": "error", "message": str(exc)})
         return

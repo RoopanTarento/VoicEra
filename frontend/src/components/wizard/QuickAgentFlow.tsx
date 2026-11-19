@@ -33,11 +33,18 @@ import { AGENT_NAME_MAX_LENGTH, DEFAULT_FORM, type AgentForm } from "@/lib/wizar
 
 const STEPS = ["Schemes", "Your agent", "Language", "Ready"] as const;
 
-/** The first agent an organisation builds: department → schemes → the agent
- * written for them → a language → test it. Every technical setting (speech,
- * AI model, voice, timeouts) takes the same best default the full wizard
- * would pick; all of it can be changed later on the agent's page. */
-export function QuickAgentFlow({ onNotify }: { onNotify: (title: string, note: string) => void }) {
+/** The short way to build a scheme agent, and what an organisation's first
+ * agent always gets: department → schemes → the agent written for them → a
+ * language → test it. Every technical setting (speech, AI model, voice,
+ * timeouts) takes the same best default the full wizard would pick; all of it
+ * can be changed later on the agent's page. */
+export function QuickAgentFlow({
+  onNotify,
+  firstAgent = true,
+}: {
+  onNotify: (title: string, note: string) => void;
+  firstAgent?: boolean;
+}) {
   const router = useRouter();
   const { session } = useAuth();
   const { can } = usePermissions();
@@ -137,7 +144,9 @@ export function QuickAgentFlow({ onNotify }: { onNotify: (title: string, note: s
         <div className="flex flex-col gap-4">
           <div className="flex flex-wrap items-end justify-between gap-3">
             <div className="flex flex-col gap-1">
-              <span className="font-mono text-[10px] font-semibold uppercase tracking-[.16em] text-v-dim">Your first agent</span>
+              <span className="font-mono text-[10px] font-semibold uppercase tracking-[.16em] text-v-dim">
+                {firstAgent ? "Your first agent" : "Quick setup"}
+              </span>
               <h1 className="text-[28px] font-semibold tracking-tight">Build your scheme discovery agent</h1>
             </div>
             {step < 3 ? (

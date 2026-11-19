@@ -21,6 +21,7 @@ import {
   Search,
   Trash2,
   User,
+  Zap,
 } from "lucide-react";
 import { FirstAgentWelcome } from "@/components/dashboard/FirstAgentWelcome";
 import { Button, IconButton } from "@/components/ui/Button";
@@ -711,6 +712,14 @@ export function AgentsHome({ onNotify }: { onNotify: (title: string, note: strin
           >
             <RefreshCw className="size-4" strokeWidth={1.9} />
           </button>
+          {can("agents:write") ? (
+            <Link href="/agent-creation?quick=1">
+              <Button variant="outline">
+                <Zap className="size-4" strokeWidth={2} />
+                Quick scheme agent
+              </Button>
+            </Link>
+          ) : null}
           {can("agents:write") ? (
             <Link href="/agent-creation">
               <Button data-tour="new-agent-button">
