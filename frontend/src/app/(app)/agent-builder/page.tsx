@@ -10,6 +10,7 @@ import {
   Ghost,
   Mic,
   MessageCircle,
+  Paperclip,
   Pencil,
   Plus,
   Send,
@@ -32,6 +33,15 @@ import {
   type CampaignDraft,
 } from "@/components/copilot/CopilotPanel";
 import { CopilotVoiceMode } from "@/components/copilot/CopilotVoiceMode";
+import {
+  ATTACHMENT_ACCEPT,
+  CopilotAttachmentImage,
+  DropOverlay,
+  PendingAttachmentStrip,
+  filesFromClipboard,
+  useCopilotAttachments,
+  useFileDrop,
+} from "@/components/copilot/attachments";
 import { VoicEraMark } from "@/components/ui/VoicEraMark";
 import { Button } from "@/components/ui/Button";
 import { RequirePermission } from "@/components/PermissionsProvider";
@@ -93,6 +103,7 @@ function ActivityLine({ event }: { event: CopilotChatMessage["toolEvents"][numbe
     propose_create_agent: "Drafting the agent",
     propose_update_agent: "Drafting the update",
     propose_create_campaign: "Drafting the campaign",
+    read_images: "Reading your images",
   };
   return (
     <div className="flex items-center gap-2 text-[12px] text-v-muted">
@@ -246,7 +257,16 @@ function Message({
           ) : null}
         </div>
         {isUser ? (
-          <p className="text-[13.5px] leading-relaxed text-v-fg">{message.content}</p>
+          <div className="flex flex-col gap-2">
+            {message.attachments && message.attachments.length > 0 ? (
+              <div className="flex flex-wrap gap-2">
+                {message.attachments.map((a) => (
+                  <CopilotAttachmentImage key={a.attachment_id} attachment={a} />
+                ))}
+              </div>
+            ) : null}
+            {message.content ? <p className="text-[13.5px] leading-relaxed text-v-fg">{message.content}</p> : null}
+          </div>
         ) : (
           <div className="flex flex-col gap-2">
             {message.toolEvents.map((e, i) => (
@@ -493,6 +513,10 @@ function AgentBuilder() {
     }
   });
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const attachments = useCopilotAttachments();
+  const fileDrop = useFileDrop(attachments.addFiles, !voiceActive);
+  const canSend = (input.trim().length > 0 || attachments.ready.length > 0) && !attachments.uploading;
 
   function toggleSidebarCollapsed() {
     setSidebarCollapsed((prev) => {
@@ -557,18 +581,60 @@ function AgentBuilder() {
 
   function submit(text?: string) {
     const raw = (text ?? input).trim();
-    if (!raw || sending) return;
+    if ((!raw && attachments.ready.length === 0) || sending || attachments.uploading) return;
     const value =
-      mode === "prompt"
+      mode === "prompt" && raw
         ? `The following is a raw agent prompt/instructions the user wants turned into a structured VoicERA agent — read it for purpose, persona, tone, responsibilities, boundaries, and language, then propose a draft:\n\n${raw}`
         : raw;
     setInput("");
     setMode("describe");
-    void send(value, pageContext);
+    const refs = attachments.takeReady();
+    void send(value, pageContext, refs.length > 0 ? refs : undefined);
   }
 
+  function pasteFiles(e: React.ClipboardEvent) {
+    const files = filesFromClipboard(e.clipboardData);
+    if (files.length > 0) {
+      e.preventDefault();
+      attachments.addFiles(files);
+    }
+  }
+
+  const attachButton = (
+    <button
+      type="button"
+      onClick={() => fileInputRef.current?.click()}
+      disabled={sending}
+      title="Attach images or documents (PDF, Word, PowerPoint, Excel, CSV, text)"
+      aria-label="Attach files"
+      className="flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-v-sm text-v-faint transition-colors hover:bg-v-soft hover:text-v-fg disabled:cursor-not-allowed disabled:opacity-40"
+    >
+      <Paperclip className="size-4" strokeWidth={1.8} />
+    </button>
+  );
+  const attachmentError = attachments.error ? (
+    <div className="rounded-v-sm border border-v-danger-line bg-v-danger-pale px-3 py-2 text-[12px] text-v-danger-deep">
+      {attachments.error}
+    </div>
+  ) : null;
+
   return (
-    <div className="relative flex h-[calc(100vh-60px)] overflow-hidden rounded-v-md border border-v-line">
+    <div
+      className="relative flex h-[calc(100vh-60px)] overflow-hidden rounded-v-md border border-v-line"
+      {...fileDrop.handlers}
+    >
+      {fileDrop.dragging ? <DropOverlay /> : null}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept={ATTACHMENT_ACCEPT}
+        multiple
+        className="hidden"
+        onChange={(e) => {
+          if (e.target.files) attachments.addFiles(e.target.files);
+          e.target.value = "";
+        }}
+      />
       {/* Slow-moving gradient wash — the same real technique as the sign-in
           hero (AuthHero.tsx). The chat/artifact panels below are opaque (for
           text contrast), so this alone would only ever show in the thin
@@ -618,13 +684,16 @@ function AgentBuilder() {
               What do you want to build?
             </span>
             <p className="max-w-[420px] text-[14px] leading-relaxed text-v-muted">
-              Describe your use case, speak it, or paste existing instructions — VoicERA turns it into
-              a working agent, grounded in this organisation&rsquo;s real data.
+              Describe your use case, speak it, paste existing instructions, or attach documents and
+              images — VoicERA turns it into a working agent, grounded in this organisation&rsquo;s real data.
             </p>
           </div>
 
           <div className="flex w-full max-w-[560px] flex-col gap-3">
-            <div className="flex items-center gap-2 rounded-v-md border border-v-line bg-v-panel p-2 shadow-[var(--v-shadow-card)]">
+            {attachmentError}
+            <div className="flex flex-col gap-2 rounded-v-md border border-v-line bg-v-panel p-2 shadow-[var(--v-shadow-card)]">
+            <PendingAttachmentStrip pending={attachments.pending} onRemove={attachments.remove} className="px-1 pt-1" />
+            <div className="flex items-center gap-2">
               <button
                 type="button"
                 onClick={() => setMode("describe")}
@@ -646,11 +715,13 @@ function AgentBuilder() {
                   }
                 }}
                 rows={1}
+                onPaste={pasteFiles}
                 placeholder={
                   mode === "prompt" ? "Paste your agent instructions…" : "e.g. \"I need an agent for crop advisory schemes in India.\""
                 }
                 className="max-h-32 min-h-[38px] flex-1 resize-none bg-transparent text-[14px] text-v-fg outline-none placeholder:text-v-faint"
               />
+              {attachButton}
               <button
                 type="button"
                 onClick={() => {
@@ -676,12 +747,13 @@ function AgentBuilder() {
               <button
                 type="button"
                 onClick={() => submit()}
-                disabled={!input.trim()}
+                disabled={!canSend}
                 title="Send"
                 className="flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-v-sm bg-v-fg text-white transition-colors hover:bg-v-accent disabled:cursor-not-allowed disabled:opacity-40"
               >
                 <Send className="size-4" strokeWidth={1.8} />
               </button>
+            </div>
             </div>
 
             <div className="flex flex-wrap items-center justify-center gap-1.5">
@@ -729,7 +801,14 @@ function AgentBuilder() {
                     />
                   ))}
                 </div>
+                {attachments.error || attachments.pending.length > 0 ? (
+                  <div className="flex flex-col gap-2 border-t border-v-hairline px-3 pt-3">
+                    {attachmentError}
+                    <PendingAttachmentStrip pending={attachments.pending} onRemove={attachments.remove} />
+                  </div>
+                ) : null}
                 <div className="flex items-center gap-2 border-t border-v-hairline p-3">
+                  {attachButton}
                   <button
                     type="button"
                     onClick={() => setVoiceActive(true)}
@@ -747,6 +826,7 @@ function AgentBuilder() {
                         submit();
                       }
                     }}
+                    onPaste={pasteFiles}
                     rows={1}
                     placeholder={mode === "prompt" ? "Paste your agent instructions…" : "Continue the conversation…"}
                     className="max-h-28 min-h-[38px] flex-1 resize-none rounded-v-md border border-v-line bg-v-bg px-3 py-2 text-[13.5px] text-v-fg outline-none placeholder:text-v-faint focus:border-v-accent"
@@ -765,7 +845,7 @@ function AgentBuilder() {
                       <Square className="size-3.5" strokeWidth={2} fill="currentColor" />
                     </Button>
                   ) : (
-                    <Button type="button" size="md" onClick={() => submit()} disabled={!input.trim()}>
+                    <Button type="button" size="md" onClick={() => submit()} disabled={!canSend}>
                       <Send className="size-3.5" strokeWidth={1.8} />
                     </Button>
                   )}

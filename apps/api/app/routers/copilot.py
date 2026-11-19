@@ -7,6 +7,7 @@ and every service call below is org- and user-scoped.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import date, datetime, timezone
 from typing import Any
@@ -44,7 +45,7 @@ from app.services.agent_service import AgentConflictError
 from app.services.agent_telephony_service import AgentTelephonyError
 from app.routers.campaign import _to_campaign_response, _validate_max_concurrency, _validate_telephony_agent
 from app.services.campaign import campaign_repository
-from app.services.copilot import attachment_store, conversation_store, draft_store, voice_session_store
+from app.services.copilot import attachment_store, conversation_store, documents, draft_store, voice_session_store
 from app.services.copilot.engine import (
     CopilotConfigurationError,
     SYSTEM_PROMPT_TEMPLATE,
@@ -136,28 +137,44 @@ async def upload_copilot_attachment(
     file: UploadFile,
     current_user: dict[str, Any] = Depends(get_current_user),
 ) -> CopilotAttachmentUploadResponse:
-    """Upload one image or contacts CSV to attach to a Copilot message.
-    Stored in MinIO; only metadata (never the raw bytes) is kept in Mongo."""
+    """Upload one image, contacts CSV or document (PDF, Word, PowerPoint,
+    Excel, text) to attach to a Copilot message. Stored in MinIO; Mongo keeps
+    only metadata, plus a document's extracted text (never the raw bytes)."""
     org_id = _require_active_org(current_user)
     content_type = (file.content_type or "").lower()
-    is_csv = (file.filename or "").lower().endswith(".csv") and content_type in _CSV_FALLBACK_TYPES
+    filename = file.filename or ""
+    is_csv = filename.lower().endswith(".csv") and content_type in _CSV_FALLBACK_TYPES
+    document_type = documents.document_type(filename)
     if is_csv:
         content_type = "text/csv"
+    elif document_type:
+        content_type = document_type
     elif content_type not in _ALLOWED_IMAGE_TYPES:
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail=f"Unsupported attachment type: {content_type or 'unknown'}",
+            detail=(
+                f"Unsupported attachment type: {content_type or 'unknown'}. Attach an image, CSV, "
+                "PDF, Word, PowerPoint, Excel or text file."
+            ),
         )
+    max_bytes = settings.COPILOT_DOCUMENT_MAX_BYTES if document_type else settings.COPILOT_ATTACHMENT_MAX_BYTES
     data = await file.read()
     if not data:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty file")
-    if len(data) > settings.COPILOT_ATTACHMENT_MAX_BYTES:
+    if len(data) > max_bytes:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"File too large (max {settings.COPILOT_ATTACHMENT_MAX_BYTES // (1024 * 1024)} MB)",
+            detail=f"File too large (max {max_bytes // (1024 * 1024)} MB)",
         )
 
-    safe_name = (file.filename or "image").rsplit("/", 1)[-1]
+    safe_name = (filename or "image").rsplit("/", 1)[-1]
+    extracted_text: str | None = None
+    if document_type:
+        try:
+            # Parsing a large PDF is CPU work; keep it off the event loop.
+            extracted_text = await asyncio.to_thread(documents.extract_text, safe_name, data)
+        except documents.DocumentError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     storage_key = f"copilot/{org_id}/{uuid.uuid4()}_{safe_name}"
 
     storage = MinIOStorage()
@@ -170,6 +187,7 @@ async def upload_copilot_attachment(
         content_type=content_type,
         original_filename=safe_name,
         size_bytes=len(data),
+        extracted_text=extracted_text,
     )
     return CopilotAttachmentUploadResponse(
         attachment_id=attachment["attachment_id"],

@@ -1268,7 +1268,7 @@ class CopilotChatHistoryMessage(BaseModel):
 
 
 class CopilotAttachmentRef(BaseModel):
-    """A reference to an already-uploaded image, attached to one message."""
+    """A reference to an already-uploaded file (image, CSV or document), attached to one message."""
 
     attachment_id: str
     content_type: str

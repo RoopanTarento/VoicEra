@@ -15,9 +15,11 @@ Started in one process:
   and rate limits (transient by nature; nothing durable lives there)
 * the mock telephony provider, so calls can be tested without a carrier
   (pass ``--no-mock`` to leave it off; Plivo / Vobiz work either way)
+* when no MinIO answers on MINIO_ENDPOINT, a folder stands in for it
+  (~/.voicera/objects), so uploads such as Agent Builder attachments and
+  campaign CSVs work; presigned URLs (browser uploads straight to MinIO) don't
 
-Not included: MinIO object storage (knowledge-base PDFs, call recordings) and
-the voice runtime. Use docker compose for those.
+Not included: the voice runtime. Use docker compose for that, and for real MinIO.
 
 Usage, from the repository root:
 
@@ -51,6 +53,46 @@ def _start_queue_server() -> None:
         except OSError:
             time.sleep(0.05)
     raise SystemExit(f"Could not start the job-queue server on port {REDIS_PORT}")
+
+
+def _use_local_object_store() -> str:
+    """Point MinIOStorage at a folder when no MinIO is running. Patches the
+    class itself, so every module that imported it gets the stand-in."""
+    endpoint = os.getenv("MINIO_ENDPOINT", "localhost:9000")
+    host, _, port = endpoint.partition(":")
+    try:
+        socket.create_connection((host or "localhost", int(port or 9000)), timeout=0.5).close()
+        return f"MinIO at {endpoint}"
+    except OSError:
+        pass
+
+    from pathlib import Path
+
+    from app.storage.minio_client import MinIOStorage
+
+    root = Path(os.getenv("VOICERA_HOME", str(Path.home() / ".voicera"))) / "objects"
+
+    def _path(bucket: str, key: str) -> Path:
+        target = (root / bucket / key).resolve()
+        if root.resolve() not in target.parents:
+            raise ValueError(f"Object key escapes the store: {key}")
+        return target
+
+    async def get_object_bytes(self, object_key: str, bucket_name: str | None = None) -> bytes:
+        return _path(bucket_name or self.default_bucket, object_key).read_bytes()
+
+    async def put_object_bytes(self, object_key, data, *, bucket_name=None, content_type="text/csv") -> None:
+        target = _path(bucket_name or self.default_bucket, object_key)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+
+    def object_exists(self, bucket_name: str, object_name: str) -> bool:
+        return _path(bucket_name, object_name).is_file()
+
+    MinIOStorage.get_object_bytes = get_object_bytes  # type: ignore[method-assign]
+    MinIOStorage.put_object_bytes = put_object_bytes  # type: ignore[method-assign]
+    MinIOStorage.object_exists = object_exists  # type: ignore[method-assign]
+    return f"folder {root} (no MinIO on {endpoint})"
 
 
 def _check_database() -> str:
@@ -110,6 +152,7 @@ async def _main(mock: bool) -> None:
         "  VoicEra backend is running (persistent)\n"
         f"  API:        http://127.0.0.1:{API_PORT}/docs\n"
         f"  Database:   {_DB_LABEL}\n"
+        f"  Files:      {_FILES_LABEL}\n"
         f"  Telephony:  {'mock provider enabled; ' if mock else ''}Plivo / Vobiz via Integrations\n"
         "  Dashboard:  http://localhost:3000 (npm --prefix frontend run dev)\n",
         flush=True,
@@ -118,10 +161,11 @@ async def _main(mock: bool) -> None:
 
 
 _DB_LABEL = ""
+_FILES_LABEL = ""
 
 
 def main() -> None:
-    global _DB_LABEL
+    global _DB_LABEL, _FILES_LABEL
     parser = argparse.ArgumentParser(description="Run the VoicEra backend against a persistent MongoDB")
     parser.add_argument("--no-mock", action="store_true", help="Don't register the mock telephony provider")
     args = parser.parse_args()
@@ -132,6 +176,7 @@ def main() -> None:
         os.environ["TELEPHONY_MOCK_ENABLED"] = "true"
 
     _DB_LABEL = _check_database()
+    _FILES_LABEL = _use_local_object_store()
     _start_queue_server()
     try:
         asyncio.run(_main(mock=not args.no_mock))

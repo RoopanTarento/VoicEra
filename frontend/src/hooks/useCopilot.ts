@@ -83,9 +83,9 @@ export function useCopilot() {
       try {
         await streamCopilotChat(
           {
-            // The backend requires non-empty text; an image-only send still
+            // The backend requires non-empty text; a files-only send still
             // needs something for the model to react to.
-            message: trimmed || "Please look at the attached image(s).",
+            message: trimmed || "Please look at the attached file(s).",
             conversationId,
             context,
             ephemeral,
@@ -186,7 +186,8 @@ export function useCopilot() {
       }
       const truncated = messages.slice(0, index);
       setMessages(truncated);
-      await send(newText, context, undefined, truncated);
+      // An edited message keeps the files it was sent with.
+      await send(newText, context, messages[index].attachments, truncated);
     },
     [messages, conversationId, sending, send],
   );

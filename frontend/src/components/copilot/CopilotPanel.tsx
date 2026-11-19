@@ -14,11 +14,11 @@ import {
   Download,
   FileSpreadsheet,
   Ghost,
-  ImagePlus,
   LayoutGrid,
   Megaphone,
   MessageCircle,
   Mic,
+  Paperclip,
   Pencil,
   Phone,
   Search,
@@ -44,8 +44,6 @@ import {
   confirmCampaignDraft,
   dismissAgentDraft,
   dismissCampaignDraft,
-  fetchCopilotAttachment,
-  uploadCopilotAttachment,
 } from "@/lib/api/copilot";
 import { downloadAnalyticsPdf } from "@/lib/report";
 import { maskPhoneNumber } from "@/lib/format";
@@ -53,26 +51,23 @@ import { CopilotHistoryMenu } from "./CopilotHistoryMenu";
 import { CopilotIntroTour, CopilotIntroTourButton, hasSeenIntro } from "./CopilotIntroTour";
 import { useCopilotUi } from "./CopilotProvider";
 import { CopilotVoiceMode } from "./CopilotVoiceMode";
+import {
+  ATTACHMENT_ACCEPT,
+  CopilotAttachmentImage,
+  DropOverlay,
+  PendingAttachmentStrip,
+  filesFromClipboard,
+  useCopilotAttachments,
+  useFileDrop,
+} from "./attachments";
 import type {
   AgentApiResponse,
   CallAnalyticsResponse,
-  CopilotAttachmentRef,
   CopilotContext,
 } from "@/lib/api-types";
 
 const STARTER_PROMPTS = ["How do integrations work?", "What should I configure first?"];
 
-const MAX_ATTACHMENTS = 4;
-const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
-
-interface PendingAttachment {
-  id: string;
-  file: File;
-  previewUrl: string;
-  status: "uploading" | "done" | "error";
-  ref?: CopilotAttachmentRef;
-  errorMessage?: string;
-}
 
 function toolLabel(tool: string): string {
   switch (tool) {
@@ -102,6 +97,8 @@ function toolLabel(tool: string): string {
       return "Drafting the update";
     case "propose_create_campaign":
       return "Drafting the campaign";
+    case "read_images":
+      return "Reading your images";
     default:
       return tool;
   }
@@ -1272,67 +1269,6 @@ function splitQuickReplies(content: string, isFinal: boolean): { text: string; r
   return { text, replies: [] };
 }
 
-/** Fetches one attachment's bytes with the same Bearer auth as everything
- * else in this app (a plain <img src> can't carry that header), then shows
- * it as a local blob URL. Caches the blob URL for the component's lifetime
- * and revokes it on unmount to avoid leaking memory across many images.
- * A CSV attachment isn't an image to preview — just show its filename. */
-function CopilotAttachmentImage({ attachment }: { attachment: CopilotAttachmentRef }) {
-  const [src, setSrc] = useState<string | null>(null);
-  const [failed, setFailed] = useState(false);
-  const isImage = attachment.content_type.startsWith("image/");
-
-  useEffect(() => {
-    if (!isImage) return;
-    let objectUrl: string | null = null;
-    let cancelled = false;
-    fetchCopilotAttachment(attachment.attachment_id)
-      .then((blob) => {
-        if (cancelled) return;
-        objectUrl = URL.createObjectURL(blob);
-        setSrc(objectUrl);
-      })
-      .catch(() => {
-        if (!cancelled) setFailed(true);
-      });
-    return () => {
-      cancelled = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [attachment.attachment_id, isImage]);
-
-  if (!isImage) {
-    return (
-      <div className="flex h-20 w-20 flex-col items-center justify-center gap-1 rounded-v-sm border border-v-line bg-v-soft px-1.5 text-center">
-        <FileSpreadsheet className="size-4 text-v-muted" strokeWidth={1.6} />
-        <span className="w-full truncate text-[9px] text-v-faint">{attachment.original_filename}</span>
-      </div>
-    );
-  }
-  if (failed) {
-    return (
-      <div className="flex h-20 w-20 items-center justify-center rounded-v-sm border border-v-line bg-v-soft text-[10px] text-v-faint">
-        Unavailable
-      </div>
-    );
-  }
-  if (!src) {
-    return (
-      <div className="flex h-20 w-20 items-center justify-center rounded-v-sm border border-v-line bg-v-soft">
-        <Spinner light={false} />
-      </div>
-    );
-  }
-  return (
-    // eslint-disable-next-line @next/next/no-img-element -- a local blob: URL, not a remote image next/image can optimize
-    <img
-      src={src}
-      alt={attachment.original_filename}
-      className="h-20 w-20 rounded-v-sm border border-v-line object-cover"
-    />
-  );
-}
-
 function MessageBubble({
   message,
   onQuickReply,
@@ -1511,8 +1447,16 @@ export function CopilotPanel({
   const [voiceActive, setVoiceActive] = useState(false);
   const [introOpen, setIntroOpen] = useState(false);
   const [introKey, setIntroKey] = useState(0);
-  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
-  const [attachmentError, setAttachmentError] = useState("");
+  const {
+    pending: pendingAttachments,
+    error: attachmentError,
+    addFiles,
+    remove: removePendingAttachment,
+    takeReady: takeReadyAttachments,
+    ready: readyAttachments,
+    uploading: attachmentsUploading,
+  } = useCopilotAttachments();
+  const fileDrop = useFileDrop(addFiles, !voiceActive);
   // Fast, deterministic "how would you like to build this?" entry — resolved
   // entirely client-side, no LLM round trip, before anything is sent to chat.
   const [agentFork, setAgentFork] = useState<"choose" | "conversational" | "campaign" | null>(null);
@@ -1551,61 +1495,11 @@ export function CopilotPanel({
     };
   }, [pageContext.agent_id]);
 
-  function uploadPending(item: PendingAttachment) {
-    uploadCopilotAttachment(item.file)
-      .then((ref) => {
-        setPendingAttachments((prev) =>
-          prev.map((p) => (p.id === item.id ? { ...p, status: "done", ref } : p)),
-        );
-      })
-      .catch((err) => {
-        const message = err instanceof Error ? err.message : "Upload failed.";
-        setPendingAttachments((prev) =>
-          prev.map((p) => (p.id === item.id ? { ...p, status: "error", errorMessage: message } : p)),
-        );
-      });
-  }
-
-  function addFiles(files: FileList | File[]) {
-    setAttachmentError("");
-    const list = Array.from(files).filter(
-      (f) => f.type.startsWith("image/") || f.name.toLowerCase().endsWith(".csv"),
-    );
-    if (list.length === 0) return;
-    if (pendingAttachments.length + list.length > MAX_ATTACHMENTS) {
-      setAttachmentError(`You can attach up to ${MAX_ATTACHMENTS} files at once.`);
-      return;
-    }
-    const oversized = list.find((f) => f.size > MAX_ATTACHMENT_BYTES);
-    if (oversized) {
-      setAttachmentError(`${oversized.name} is over the 8 MB limit.`);
-      return;
-    }
-    const additions: PendingAttachment[] = list.map((file) => ({
-      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-      file,
-      previewUrl: URL.createObjectURL(file),
-      status: "uploading",
-    }));
-    setPendingAttachments((prev) => [...prev, ...additions]);
-    additions.forEach(uploadPending);
-  }
-
-  function removePendingAttachment(id: string) {
-    setPendingAttachments((prev) => {
-      const target = prev.find((p) => p.id === id);
-      if (target) URL.revokeObjectURL(target.previewUrl);
-      return prev.filter((p) => p.id !== id);
-    });
-  }
-
   function openIntro() {
     setIntroKey((k) => k + 1); // forces CopilotIntroTour to remount at step 0
     setIntroOpen(true);
   }
 
-  const readyAttachments = pendingAttachments.filter((p) => p.status === "done" && p.ref);
-  const attachmentsUploading = pendingAttachments.some((p) => p.status === "uploading");
 
   function submit(text?: string) {
     const raw = (text ?? input).trim();
@@ -1616,9 +1510,7 @@ export function CopilotPanel({
     // to a draft in one round trip instead of asking what kind of agent.
     const value = agentFork === "conversational" ? `Create a conversational agent: ${raw}` : raw;
     setInput("");
-    const refs = readyAttachments.map((p) => p.ref!);
-    pendingAttachments.forEach((p) => URL.revokeObjectURL(p.previewUrl));
-    setPendingAttachments([]);
+    const refs = takeReadyAttachments();
     setAgentFork(null);
     void send(value, pageContext, refs.length > 0 ? refs : undefined);
   }
@@ -1927,7 +1819,8 @@ export function CopilotPanel({
         onClose={onClose}
       />
 
-      <div className="relative flex min-h-0 flex-1 flex-col">
+      <div className="relative flex min-h-0 flex-1 flex-col" {...fileDrop.handlers}>
+        {fileDrop.dragging ? <DropOverlay /> : null}
         <CopilotIntroTour key={introKey} active={introOpen} onClose={() => setIntroOpen(false)} />
         {voiceActive ? (
           <CopilotVoiceMode conversationId={conversationId} onClose={() => setVoiceActive(false)} />
@@ -2215,52 +2108,17 @@ export function CopilotPanel({
         </div>
       ) : null}
 
-      {pendingAttachments.length > 0 ? (
-        <div className="flex flex-wrap gap-2 border-t border-v-line px-4 pt-3">
-          {pendingAttachments.map((p) => (
-            <div key={p.id} className="relative">
-              {p.file.type.startsWith("image/") ? (
-                // eslint-disable-next-line @next/next/no-img-element -- a local blob: URL, not a remote image next/image can optimize
-                <img
-                  src={p.previewUrl}
-                  alt={p.file.name}
-                  className={`size-14 rounded-v-sm border object-cover ${
-                    p.status === "error" ? "border-v-danger-line opacity-50" : "border-v-line"
-                  }`}
-                />
-              ) : (
-                <div
-                  className={`flex size-14 flex-col items-center justify-center gap-0.5 rounded-v-sm border px-1 text-center ${
-                    p.status === "error" ? "border-v-danger-line opacity-50" : "border-v-line bg-v-soft"
-                  }`}
-                >
-                  <FileSpreadsheet className="size-4 text-v-muted" strokeWidth={1.6} />
-                  <span className="w-full truncate text-[9px] text-v-faint">{p.file.name}</span>
-                </div>
-              )}
-              {p.status === "uploading" ? (
-                <div className="absolute inset-0 flex items-center justify-center rounded-v-sm bg-black/30">
-                  <Spinner />
-                </div>
-              ) : null}
-              <button
-                type="button"
-                title="Remove"
-                onClick={() => removePendingAttachment(p.id)}
-                className="absolute -right-1.5 -top-1.5 flex size-4.5 cursor-pointer items-center justify-center rounded-full bg-v-fg text-white"
-              >
-                <X className="size-2.5" strokeWidth={2.5} />
-              </button>
-            </div>
-          ))}
-        </div>
-      ) : null}
+      <PendingAttachmentStrip
+        pending={pendingAttachments}
+        onRemove={removePendingAttachment}
+        className="border-t border-v-line px-4 pt-3"
+      />
 
       <div className="flex items-end gap-2 border-t border-v-line px-4 py-3">
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/png,image/jpeg,image/webp,image/gif,.csv,text/csv"
+          accept={ATTACHMENT_ACCEPT}
           multiple
           className="hidden"
           onChange={(e) => {
@@ -2270,11 +2128,11 @@ export function CopilotPanel({
         />
         <IconButton
           type="button"
-          title="Attach an image or contacts CSV"
+          title="Attach images or documents (PDF, Word, PowerPoint, Excel, CSV, text)"
           onClick={() => fileInputRef.current?.click()}
           disabled={sending}
         >
-          <ImagePlus className="size-4" strokeWidth={1.8} />
+          <Paperclip className="size-4" strokeWidth={1.8} />
         </IconButton>
         <textarea
           ref={textareaRef}
@@ -2287,11 +2145,11 @@ export function CopilotPanel({
             }
           }}
           onPaste={(e) => {
-            const files = Array.from(e.clipboardData.items)
-              .filter((item) => item.type.startsWith("image/"))
-              .map((item) => item.getAsFile())
-              .filter((f): f is File => f !== null);
-            if (files.length > 0) addFiles(files);
+            const files = filesFromClipboard(e.clipboardData);
+            if (files.length > 0) {
+              e.preventDefault();
+              addFiles(files);
+            }
           }}
           rows={1}
           placeholder={

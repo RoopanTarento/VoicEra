@@ -206,6 +206,14 @@ class Settings(BaseSettings):
             "SYSTEM_PROMPT_TEMPLATE / TOOL_SPECS for that side of the budget."
         ),
     )
+    COPILOT_REASONING_EFFORT: str = Field(
+        default="low",
+        description=(
+            "Reasoning effort for gpt-oss models (low, medium, high; blank = the provider's "
+            "default). Their reasoning counts against COPILOT_MAX_OUTPUT_TOKENS, and at the "
+            "default effort it can use the whole budget and leave no answer."
+        ),
+    )
     COPILOT_HISTORY_MESSAGES: int = Field(
         default=16,
         description="Max prior messages (from the stored conversation) replayed as context",
@@ -213,6 +221,31 @@ class Settings(BaseSettings):
     COPILOT_ATTACHMENT_MAX_BYTES: int = Field(
         default=8 * 1024 * 1024,
         description="Maximum image size a user can attach to a Copilot message",
+    )
+    COPILOT_DOCUMENT_MAX_BYTES: int = Field(
+        default=20 * 1024 * 1024,
+        description="Maximum size of a document (PDF, Word, PowerPoint, Excel, text) attached to a Copilot message",
+    )
+    COPILOT_DOCUMENT_CONTEXT_CHARS: int = Field(
+        default=6000,
+        description=(
+            "How much of the chat's attached documents is sent with each turn, in characters "
+            "(about 4 per token in English, fewer in Indic scripts). A longer document is cut "
+            "to the parts that best match the question. Kept small for Groq's 8000 tokens/min "
+            "cap; raise it on a provider with more headroom."
+        ),
+    )
+    COPILOT_DOCUMENTS_PER_CHAT: int = Field(
+        default=5,
+        description="How many of a chat's most recent documents stay in context on later turns",
+    )
+    COPILOT_VISION_MODEL: str = Field(
+        default="",
+        description=(
+            "Model that reads attached images when the Copilot's own model can't. Blank = "
+            "a default for COPILOT_LLM_PROVIDER (see _VISION_DEFAULT_MODELS in "
+            "apps/api/app/services/copilot/engine.py)."
+        ),
     )
 
     @field_validator("DEBUG", "SECURE_ENFORCE_VAULT_CAMPAIGNS", "TELEPHONY_MOCK_ENABLED", mode="before")

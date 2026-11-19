@@ -1,9 +1,11 @@
-"""Org-scoped storage for images attached to Copilot messages.
+"""Org-scoped storage for files attached to Copilot messages (images, contact
+CSVs and documents).
 
-The image bytes live in MinIO (same bucket as knowledge-base documents and
+The file bytes live in MinIO (same bucket as knowledge-base documents and
 call artifacts); this collection only tracks metadata + ownership, so
 GET /copilot/attachments/{id} can enforce "only your org" before ever
-touching MinIO.
+touching MinIO. A document also keeps its extracted text here, so a turn
+never has to download and parse it again.
 """
 
 from __future__ import annotations
@@ -42,8 +44,9 @@ def create_attachment(
     content_type: str,
     original_filename: str,
     size_bytes: int,
+    extracted_text: str | None = None,
 ) -> dict[str, Any]:
-    doc = {
+    doc: dict[str, Any] = {
         "attachment_id": str(uuid.uuid4()),
         "org_id": org_id,
         "created_by": created_by,
@@ -53,6 +56,8 @@ def create_attachment(
         "size_bytes": size_bytes,
         "created_at": _now_iso(),
     }
+    if extracted_text is not None:
+        doc["extracted_text"] = extracted_text
     get_database()[COLLECTION].insert_one(dict(doc))
     return _to_response(doc) or {}
 

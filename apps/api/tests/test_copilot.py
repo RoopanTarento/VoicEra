@@ -787,6 +787,8 @@ class _FakeCompletions:
 
         async def _gen():
             for chunk in chunks:
+                if isinstance(chunk, BaseException):  # the provider aborting mid-stream
+                    raise chunk
                 yield chunk
 
         return _gen()
@@ -1685,6 +1687,46 @@ async def test_engine_propose_create_agent_stages_real_draft(fake_mongo, monkeyp
     assert stored["org_id"] == "org-a"
     assert fake_mongo["Agents"].count_documents({}) == 0
 
+    # The turn ends on the draft: one model call, not a second one to describe
+    # what the draft card already shows.
+    assert len(fake_cls.completions.calls) == 1
+    assert "**Grievance Bot**" in events[-1]["text"]
+    assert "Create agent" in events[-1]["text"]
+
+
+@pytest.mark.asyncio
+async def test_engine_retries_a_round_the_provider_aborts_mid_stream(fake_mongo, monkeypatch):
+    monkeypatch.setattr(engine.settings, "COPILOT_LLM_API_KEY", "test-key")
+    monkeypatch.setattr(engine, "_TOOL_CALL_ERROR_RETRY_DELAY_S", 0)
+    args = json.dumps({"name": "Grievance Bot", "purpose": "log citizen complaints", "primary_language": "hi"})
+    fake_cls = _fake_openai_factory(
+        [
+            [_tool_call_chunk(0, call_id="call_1", name="propose_create_agent", arguments='{"name": "Grie'),
+             _make_tool_call_json_error()],
+            [
+                _tool_call_chunk(0, call_id="call_2", name="propose_create_agent", arguments=args),
+                _tool_call_chunk(0, finish_reason="tool_calls"),
+            ],
+        ]
+    )
+    monkeypatch.setattr(engine, "AsyncOpenAI", fake_cls)
+
+    events = _parse_sse_events([
+        line
+        async for line in engine.run_copilot_turn(
+            org_id="org-a",
+            user_email="alice@example.com",
+            role="admin",
+            message="Create a Hindi grievance-logging agent",
+            conversation_id=None,
+            context=None,
+        )
+    ])
+    assert [e["type"] for e in events if e["type"] in ("retry_wait", "error")] == ["retry_wait"]
+    assert len(fake_cls.completions.calls) == 2
+    assert fake_mongo["CopilotAgentDrafts"].count_documents({}) == 1
+    assert "**Grievance Bot**" in events[-1]["text"]
+
 
 # ---------------------------------------------------------------------------
 # Voice mode: session lifecycle, internal bundle/tool/turn endpoints
@@ -1915,12 +1957,13 @@ def test_upload_attachment_and_fetch_roundtrip(fake_mongo, copilot_app: FastAPI)
         assert fetched.headers["content-type"] == "image/png"
 
 
-def test_attachment_rejects_non_image_type(fake_mongo, copilot_app: FastAPI):
+def test_attachment_rejects_unsupported_type(fake_mongo, copilot_app: FastAPI):
+    # Images, CSVs and documents are accepted (see the document tests); anything else isn't.
     copilot_app.dependency_overrides[get_current_user] = lambda: _user("alice@example.com")
     client = TestClient(copilot_app)
     response = client.post(
         "/api/v1/copilot/attachments",
-        files={"file": ("doc.pdf", b"%PDF-1.4", "application/pdf")},
+        files={"file": ("installer.dmg", b"koly", "application/x-apple-diskimage")},
     )
     assert response.status_code == 415
 
@@ -2025,6 +2068,8 @@ async def test_engine_tells_user_plainly_when_model_cannot_see_images(fake_mongo
         [[_content_chunk("I can't see images right now."), _content_chunk(None, finish_reason="stop")]]
     )
     monkeypatch.setattr(engine, "AsyncOpenAI", fake_cls)
+    # No vision model could read them either (unavailable, or its call failed).
+    monkeypatch.setattr(engine, "_describe_images", AsyncMock(return_value=None))
 
     from app.services.copilot import attachment_store
 
@@ -2061,6 +2106,285 @@ async def test_engine_tells_user_plainly_when_model_cannot_see_images(fake_mongo
     assert "cannot see or analyse images" in system_message["content"]
     user_message = next(m for m in sent_messages if m["role"] == "user")
     assert isinstance(user_message["content"], str)
+
+
+@pytest.mark.asyncio
+async def test_text_only_model_answers_from_a_vision_models_description(fake_mongo, monkeypatch):
+    monkeypatch.setattr(engine.settings, "COPILOT_LLM_API_KEY", "test-key")
+    monkeypatch.setattr(engine.settings, "COPILOT_LLM_PROVIDER", "groq")
+    monkeypatch.setattr(engine.settings, "COPILOT_LLM_MODEL", "openai/gpt-oss-20b")
+    fake_cls = _fake_openai_factory(
+        [[_content_chunk("The form asks for an Aadhaar number."), _content_chunk(None, finish_reason="stop")]]
+    )
+    monkeypatch.setattr(engine, "AsyncOpenAI", fake_cls)
+    describe = AsyncMock(return_value="Image 1: a scheme enrolment form with fields Name and Aadhaar number.")
+    monkeypatch.setattr(engine, "_describe_images", describe)
+
+    from app.services.copilot import attachment_store
+
+    attachment = attachment_store.create_attachment(
+        "org-a",
+        "alice@example.com",
+        storage_key="copilot/org-a/form.png",
+        content_type="image/png",
+        original_filename="form.png",
+        size_bytes=3,
+    )
+
+    with patch(
+        "app.services.copilot.engine.MinIOStorage",
+        _fake_minio_storage({"copilot/org-a/form.png": b"\x89PNG\r\n"}),
+    ):
+        lines = [
+            line
+            async for line in engine.run_copilot_turn(
+                org_id="org-a",
+                user_email="alice@example.com",
+                role="admin",
+                message="What does this form ask for?",
+                conversation_id=None,
+                context=None,
+                attachment_ids=[attachment["attachment_id"]],
+            )
+        ]
+
+    events = _parse_sse_events(lines)
+    assert [e["tool"] for e in events if e["type"] in ("tool_call", "tool_result")] == ["read_images", "read_images"]
+    describe.assert_awaited_once()
+    assert describe.await_args.args[1] == "groq"
+
+    sent = fake_cls.completions.calls[0]["messages"]
+    system_message = next(m for m in sent if m["role"] == "system")
+    assert "Aadhaar number" in system_message["content"]
+    assert "cannot see or analyse" not in system_message["content"]
+    user_message = next(m for m in sent if m["role"] == "user")
+    assert isinstance(user_message["content"], str)  # the image itself never reaches the text-only model
+
+    # The description is kept with the message, so a follow-up can still use it.
+    conv = conversation_store.get_conversation("org-a", "alice@example.com", events[0]["conversation_id"])
+    assert "Aadhaar number" in conv["messages"][0]["image_description"]
+    replayed = engine._history_to_messages(conv, 16)
+    assert "Aadhaar number" in replayed[0]["content"]
+
+
+def test_reasoning_effort_is_lowered_only_for_gpt_oss(monkeypatch):
+    monkeypatch.setattr(engine.settings, "COPILOT_REASONING_EFFORT", "low")
+    assert engine._reasoning_kwargs("groq", "openai/gpt-oss-20b") == {"reasoning_effort": "low"}
+    assert engine._reasoning_kwargs("openrouter", "openai/gpt-oss-120b") == {
+        "extra_body": {"reasoning": {"effort": "low"}}
+    }
+    assert engine._reasoning_kwargs("openai", "gpt-4.1-mini") == {}
+    monkeypatch.setattr(engine.settings, "COPILOT_REASONING_EFFORT", "")
+    assert engine._reasoning_kwargs("groq", "openai/gpt-oss-20b") == {}
+
+
+@pytest.mark.asyncio
+async def test_reply_cut_off_before_any_text_says_so(fake_mongo, monkeypatch):
+    monkeypatch.setattr(engine.settings, "COPILOT_LLM_API_KEY", "test-key")
+    fake_cls = _fake_openai_factory([[_content_chunk(None, finish_reason="length")]])
+    monkeypatch.setattr(engine, "AsyncOpenAI", fake_cls)
+
+    events = _parse_sse_events([
+        line
+        async for line in engine.run_copilot_turn(
+            org_id="org-a",
+            user_email="alice@example.com",
+            role="admin",
+            message="Build me an agent",
+            conversation_id=None,
+            context=None,
+        )
+    ])
+    assert "ran out of room" in events[-1]["text"]
+
+
+def _docx_bytes(*paragraphs: str) -> bytes:
+    import io
+    import zipfile
+
+    body = "".join(f"<w:p><w:r><w:t>{p}</w:t></w:r></w:p>" for p in paragraphs)
+    xml = (
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        f"<w:body>{body}</w:body></w:document>"
+    )
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as book:
+        book.writestr("word/document.xml", xml)
+    return buffer.getvalue()
+
+
+def _pptx_bytes(*slides: str) -> bytes:
+    import io
+    import zipfile
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as book:
+        for number, text in enumerate(slides, start=1):
+            book.writestr(
+                f"ppt/slides/slide{number}.xml",
+                '<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" '
+                'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
+                f"<p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>{text}</a:t></a:r></a:p>"
+                "</p:txBody></p:sp></p:spTree></p:cSld></p:sld>",
+            )
+    return buffer.getvalue()
+
+
+def _pdf_bytes(text: str) -> bytes:
+    """A one-page PDF with real text on it, built by hand (no PDF writer needed)."""
+    stream = f"BT /F1 12 Tf 72 720 Td ({text}) Tj ET".encode()
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R "
+        b"/Resources << /Font << /F1 5 0 R >> >> >>",
+        b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+    out = b"%PDF-1.4\n"
+    offsets = []
+    for number, body in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += f"{number} 0 obj\n".encode() + body + b"\nendobj\n"
+    xref = len(out)
+    out += f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode()
+    out += b"".join(f"{o:010d} 00000 n \n".encode() for o in offsets)
+    out += f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
+    return out
+
+
+def test_documents_extract_text_from_each_supported_format():
+    from app.services.copilot import documents
+
+    assert "PM-KISAN pays 6000 rupees" in documents.extract_text("scheme.pdf", _pdf_bytes("PM-KISAN pays 6000 rupees"))
+    assert documents.extract_text("scheme.pdf", _pdf_bytes("hello")).startswith("[Page 1]")
+    assert documents.extract_text("faq.docx", _docx_bytes("Who is eligible?", "Small farmers.")) == (
+        "Who is eligible?\n\nSmall farmers."
+    )
+    assert documents.extract_text("deck.pptx", _pptx_bytes("Intro", "Benefits")) == (
+        "[Slide 1]\nIntro\n\n[Slide 2]\nBenefits"
+    )
+    assert documents.extract_text("notes.md", "# Title\r\n\r\n\r\n\r\nBody".encode()) == "# Title\n\nBody"
+
+
+def test_documents_reject_unreadable_and_empty_files():
+    from app.services.copilot import documents
+
+    with pytest.raises(documents.DocumentError, match="couldn't be read"):
+        documents.extract_text("broken.docx", b"not a zip file")
+    with pytest.raises(documents.DocumentError, match="No text found"):
+        documents.extract_text("empty.txt", b"   \n  ")
+
+
+def test_document_context_is_whole_when_it_fits_and_relevant_excerpts_when_not():
+    from app.services.copilot import documents
+
+    small = documents.build_context([("faq.txt", "Short FAQ.")], "anything", 1000)
+    assert '"faq.txt" (full text)' in small and "Short FAQ." in small
+
+    filler = "\n\n".join(f"Paragraph {i} about general programme history and background." * 8 for i in range(40))
+    text = filler + "\n\nEligibility: farmers owning under two hectares can enrol." + "\n\n" + filler
+    context = documents.build_context([("guide.pdf", text)], "Who is eligible to enrol?", 3000)
+    assert "farmers owning under two hectares" in context
+    assert "excerpts; the full document is" in context
+    assert "[…]" in context
+    assert len(context) < 3000 + 800  # budget plus the fixed instructions
+
+
+def test_upload_document_stores_its_text_and_rejects_unsupported_files(fake_mongo, copilot_app: FastAPI):
+    objects: dict[str, bytes] = {}
+    copilot_app.dependency_overrides[get_current_user] = lambda: _user("alice@example.com", org_id="org-a")
+    client = TestClient(copilot_app)
+    with patch("app.routers.copilot.MinIOStorage", _fake_minio_storage(objects)):
+        upload = client.post(
+            "/api/v1/copilot/attachments",
+            files={"file": ("faq.docx", _docx_bytes("Helpline is 1800-180-1551."), "application/octet-stream")},
+        )
+        assert upload.status_code == 201
+        body = upload.json()
+        assert body["content_type"].endswith("wordprocessingml.document")
+        assert "extracted_text" not in body
+        stored = fake_mongo["CopilotAttachments"].find_one({"attachment_id": body["attachment_id"]})
+        assert stored["extracted_text"] == "Helpline is 1800-180-1551."
+
+        unsupported = client.post(
+            "/api/v1/copilot/attachments",
+            files={"file": ("tool.exe", b"MZ", "application/octet-stream")},
+        )
+        assert unsupported.status_code == 415
+
+        unreadable = client.post(
+            "/api/v1/copilot/attachments",
+            files={"file": ("broken.pdf", b"%PDF-1.4 garbage", "application/pdf")},
+        )
+        assert unreadable.status_code == 422
+        assert "broken.pdf" in unreadable.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_document_text_reaches_the_model_on_its_turn_and_later_turns(fake_mongo, monkeypatch):
+    monkeypatch.setattr(engine.settings, "COPILOT_LLM_API_KEY", "test-key")
+    fake_cls = _fake_openai_factory(
+        [
+            [_content_chunk("The helpline is 1800-180-1551."), _content_chunk(None, finish_reason="stop")],
+            [_content_chunk("Small farmers."), _content_chunk(None, finish_reason="stop")],
+        ]
+    )
+    monkeypatch.setattr(engine, "AsyncOpenAI", fake_cls)
+
+    from app.services.copilot import attachment_store, documents
+
+    attachment = attachment_store.create_attachment(
+        "org-a",
+        "alice@example.com",
+        storage_key="copilot/org-a/faq.docx",
+        content_type=documents.DOCUMENT_TYPES[".docx"],
+        original_filename="faq.docx",
+        size_bytes=10,
+        extracted_text="Helpline is 1800-180-1551.\n\nEligibility: small farmers.",
+    )
+    # Another org's document with the same id must never be read.
+    other = attachment_store.create_attachment(
+        "org-b",
+        "mallory@example.com",
+        storage_key="copilot/org-b/secret.docx",
+        content_type=documents.DOCUMENT_TYPES[".docx"],
+        original_filename="secret.docx",
+        size_bytes=10,
+        extracted_text="Org B secret.",
+    )
+
+    # No MinIO patch: a document's text comes from Mongo, its bytes are never fetched.
+    first = _parse_sse_events([
+        line
+        async for line in engine.run_copilot_turn(
+            org_id="org-a",
+            user_email="alice@example.com",
+            role="admin",
+            message="What's the helpline number?",
+            conversation_id=None,
+            context=None,
+            attachment_ids=[attachment["attachment_id"], other["attachment_id"]],
+        )
+    ])
+    system_first = next(m for m in fake_cls.completions.calls[0]["messages"] if m["role"] == "system")["content"]
+    assert "1800-180-1551" in system_first
+    assert "Org B secret" not in system_first
+
+    conversation_id = first[0]["conversation_id"]
+    [
+        line
+        async for line in engine.run_copilot_turn(
+            org_id="org-a",
+            user_email="alice@example.com",
+            role="admin",
+            message="Who is eligible?",
+            conversation_id=conversation_id,
+            context=None,
+        )
+    ]
+    system_second = next(m for m in fake_cls.completions.calls[1]["messages"] if m["role"] == "system")["content"]
+    assert "Eligibility: small farmers." in system_second
 
 
 # ---------------------------------------------------------------------------

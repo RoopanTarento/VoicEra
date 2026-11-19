@@ -37,7 +37,7 @@ from openai import APIError, AsyncOpenAI, RateLimitError
 
 from app.config import settings
 from app.services import auth_service
-from app.services.copilot import attachment_store, conversation_store
+from app.services.copilot import attachment_store, conversation_store, documents
 from app.services.copilot.tool_specs import TOOL_SPECS
 from app.services.copilot.tools import TOOL_FUNCTIONS, CopilotToolError
 from app.storage.minio_client import MinIOStorage
@@ -290,6 +290,33 @@ def _is_request_too_large_error(exc: APIError) -> bool:
 _SHRUNK_MAX_TOKENS = 256
 
 
+# Once a draft exists the turn ends with a fixed line instead of another model
+# call. The draft card already shows every field, so a model-written summary
+# only repeated it, and that extra call is what tipped a turn over Groq's
+# 8000 tokens/min: measured 13 Nov 2026, the draft was ready at 1.9 s and the
+# summary took the turn to 78 s through two rate-limit waits, during which the
+# model also drafted the same agent a second time.
+_DRAFT_REPLIES = {
+    "propose_create_agent": (
+        "Here's a draft of **{name}**. Review it on the draft card, tell me anything to "
+        "change, then click **Create agent** to save it."
+    ),
+    "propose_update_agent": (
+        "Here are the proposed changes to **{name}**. Review them on the draft card, then "
+        "click **Update agent** to save them."
+    ),
+    "propose_create_campaign": (
+        "Here's a draft of the campaign **{name}**. Review it on the draft card, then click "
+        "**Create campaign** to save it."
+    ),
+}
+
+
+def _draft_reply(tool: str, result: dict[str, Any]) -> str:
+    name = str(result.get("name") or result.get("agent_name") or "your agent").strip()
+    return _DRAFT_REPLIES[tool].format(name=name)
+
+
 async def _sleep_with_heartbeats(seconds: float) -> AsyncIterator[str]:
     """Wait out ``seconds``, yielding an SSE keep-alive comment roughly every
     _HEARTBEAT_INTERVAL_S along the way. A retry wait can now run up to
@@ -402,6 +429,24 @@ def _resolve_model(provider: str) -> str:
     return (settings.COPILOT_LLM_MODEL or "").strip() or _PROVIDER_DEFAULT_MODELS[provider]
 
 
+def _reasoning_kwargs(provider: str, model: str) -> dict[str, Any]:
+    """How hard a reasoning model thinks before it answers.
+
+    gpt-oss counts its hidden reasoning against max_tokens. At its default
+    effort it was measured (13 Nov 2026, Groq) spending 508 of a 512-token
+    budget reasoning about a plain "build me an agent" request and returning
+    no text at all (finish_reason "length"), which then looks like a blank
+    reply or a broken tool call and triggers retries. Lower effort leaves the
+    budget for the answer. Other models ignore this.
+    """
+    effort = (settings.COPILOT_REASONING_EFFORT or "").strip().lower()
+    if not effort or "gpt-oss" not in model:
+        return {}
+    if provider == "openrouter":
+        return {"extra_body": {"reasoning": {"effort": effort}}}
+    return {"reasoning_effort": effort}
+
+
 # Vision-capable OpenAI chat-completions models, as of their model catalog
 # (apps/providers/cloud/openai/catalog.py). None of Groq's or OpenRouter's
 # models in this app's catalogs are known vision-capable via their
@@ -411,6 +456,51 @@ _VISION_MODEL_PREFIXES = ("gpt-4.1", "gpt-4o", "gpt-5")
 
 def _model_supports_vision(provider: str, model: str) -> bool:
     return provider == "openai" and model.startswith(_VISION_MODEL_PREFIXES)
+
+
+# When the chat model is text-only, attached images are first read by one of
+# these on the same provider (and the same key), and the chat model gets its
+# description instead. COPILOT_VISION_MODEL overrides the choice. Checked
+# 13 Nov 2026: Groq's only image-capable model is Qwen (it retired Llama 4
+# Scout), and OpenRouter lists Qwen with image input too.
+_VISION_DEFAULT_MODELS: dict[str, str] = {
+    "openai": "gpt-4.1-mini",
+    "groq": "qwen/qwen3.8-27b",
+    "openrouter": "qwen/qwen3.8-27b",
+}
+_DESCRIBE_IMAGES_MAX_TOKENS = 1024  # a dense form or table needs more than a chat reply
+
+_DESCRIBE_IMAGES_PROMPT = (
+    "Describe the attached image(s) for an assistant that cannot see them. Copy any "
+    "text in them exactly, including tables, form fields and numbers. Then describe "
+    "layout, charts or screenshots in enough detail to answer questions about them. "
+    "With several images, head each one Image 1, Image 2 and so on. Plain text only."
+)
+
+
+async def _describe_images(
+    client: AsyncOpenAI, provider: str, data_uris: list[str], message: str
+) -> str | None:
+    """What a vision model sees in the images, or None when none is available
+    or the call fails (the chat model then says it can't see them)."""
+    model = (settings.COPILOT_VISION_MODEL or "").strip() or _VISION_DEFAULT_MODELS.get(provider)
+    if not model or not data_uris:
+        return None
+    prompt = _DESCRIBE_IMAGES_PROMPT + (f"\n\nThe user's message with them: {message}" if message else "")
+    content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+    content.extend({"type": "image_url", "image_url": {"url": uri}} for uri in data_uris)
+    try:
+        response = await client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": content}],
+            max_tokens=_DESCRIBE_IMAGES_MAX_TOKENS,
+            stream=False,
+        )
+        description = (response.choices[0].message.content or "").strip()
+    except Exception:
+        logger.warning("Copilot image description failed provider=%s model=%s", provider, model, exc_info=True)
+        return None
+    return description or None
 
 
 def _resolve_api_key(org_id: str, provider: str) -> str:
@@ -476,6 +566,7 @@ async def improve_prompt_text(org_id: str, text: str) -> str:
         ],
         max_tokens=400,
         stream=False,
+        **_reasoning_kwargs(provider, model),
     )
     improved = (response.choices[0].message.content or "").strip()
     return improved or text
@@ -501,7 +592,39 @@ def _page_context_line(context: dict[str, Any] | None) -> str:
 def _history_to_messages(conversation: dict[str, Any], max_messages: int) -> list[dict[str, str]]:
     stored = conversation.get("messages") or []
     trimmed = stored[-max_messages:] if max_messages > 0 else []
-    return [{"role": m["role"], "content": m["content"]} for m in trimmed if m.get("content")]
+    messages = []
+    for m in trimmed:
+        content = m.get("content") or ""
+        # What a vision model saw in an earlier message's images, so a
+        # follow-up question about them still has something to go on.
+        if m.get("image_description"):
+            content += f"\n\n[Images attached to this message, as described then: {m['image_description']}]"
+        if content:
+            messages.append({"role": m["role"], "content": content})
+    return messages
+
+
+def _conversation_document_ids(conversation: dict[str, Any] | None) -> list[str]:
+    """Documents attached earlier in this chat, newest first."""
+    ids: list[str] = []
+    for m in reversed((conversation or {}).get("messages") or []):
+        for ref in m.get("attachments") or []:
+            if documents.is_document(ref.get("content_type")) and ref.get("attachment_id") not in ids:
+                ids.append(ref["attachment_id"])
+    return ids
+
+
+def _document_context(org_id: str, attachment_ids: list[str], question: str) -> str:
+    """The chat's documents, this turn's first, cut to the context budget."""
+    loaded: list[tuple[str, str]] = []
+    for attachment_id in attachment_ids[: max(0, settings.COPILOT_DOCUMENTS_PER_CHAT)]:
+        try:
+            record = attachment_store.get_attachment(org_id, attachment_id)
+        except attachment_store.CopilotAttachmentNotFoundError:
+            continue
+        if record.get("extracted_text"):
+            loaded.append((record["original_filename"], record["extracted_text"]))
+    return documents.build_context(loaded, question, settings.COPILOT_DOCUMENT_CONTEXT_CHARS)
 
 
 def _describe_csv_attachment(filename: str, storage_key: str, data: bytes) -> str:
@@ -541,8 +664,9 @@ async def _resolve_attachments(
 ) -> tuple[list[dict[str, Any]], list[str], list[str]]:
     """Look up each attachment (org-scoped) and split it into vision content
     (images, as base64 data URIs) or a plain-text context note (CSVs — real
-    validation, not guessed at). Skips (and logs) any id that's missing or
-    belongs to another org, rather than failing the whole turn over one bad id."""
+    validation, not guessed at). Documents only get a reference here; their
+    text comes from _document_context. Skips (and logs) any id that's missing
+    or belongs to another org, rather than failing the whole turn over one bad id."""
     if not attachment_ids:
         return [], [], []
 
@@ -553,7 +677,11 @@ async def _resolve_attachments(
     for attachment_id in attachment_ids:
         try:
             record = attachment_store.get_attachment(org_id, attachment_id)
-            data = await storage.get_object_bytes(record["storage_key"])
+            data = (
+                b""
+                if documents.is_document(record["content_type"])
+                else await storage.get_object_bytes(record["storage_key"])
+            )
         except Exception:
             logger.warning("Copilot attachment %s unavailable for org=%s", attachment_id, org_id)
             continue
@@ -566,6 +694,8 @@ async def _resolve_attachments(
         )
         if record["content_type"] == "text/csv":
             notes.append(_describe_csv_attachment(record["original_filename"], record["storage_key"], data))
+        elif documents.is_document(record["content_type"]):
+            continue
         else:
             encoded = base64.b64encode(data).decode("ascii")
             data_uris.append(f"data:{record['content_type']};base64,{encoded}")
@@ -681,16 +811,37 @@ async def run_copilot_turn(
         org_id, attachment_ids or []
     )
     vision_ok = _model_supports_vision(provider, model)
+    image_description: str | None = None
     if image_data_uris and not vision_ok:
-        system_prompt += (
-            f"\n\nThe user attached {len(image_data_uris)} image(s) with this message, but "
-            f"the model currently configured for Ask VoicEra ({model}) cannot see or analyse "
-            "images. Tell them that plainly — don't guess at what the image shows, and "
-            "mention that an admin can switch to a vision-capable OpenAI model (gpt-4.1 or "
-            "gpt-5) in Integrations to enable this."
-        )
+        yield _sse({"type": "tool_call", "tool": "read_images", "arguments": {"count": len(image_data_uris)}})
+        image_description = await _describe_images(client, provider, image_data_uris, message)
+        yield _sse({"type": "tool_result", "tool": "read_images", "ok": image_description is not None, "data": {}})
+        if image_description:
+            system_prompt += (
+                f"\n\nThe user attached {len(image_data_uris)} image(s) with this message. "
+                "A vision model read them for you; its description is below. Answer from it "
+                "as if you had seen the images, and say so if a detail isn't covered.\n\n"
+                f"{image_description}"
+            )
+        else:
+            system_prompt += (
+                f"\n\nThe user attached {len(image_data_uris)} image(s) with this message, but "
+                f"the model currently configured for Ask VoicEra ({model}) cannot see or analyse "
+                "images, and no vision model could read them. Tell them that plainly — don't "
+                "guess at what the image shows, and mention that an admin can switch to a "
+                "vision-capable OpenAI model (gpt-4.1 or gpt-5) in Integrations to enable this."
+            )
     for note in attachment_notes:
         system_prompt += f"\n\n{note}"
+
+    this_turn_documents = [r["attachment_id"] for r in attachment_refs if documents.is_document(r["content_type"])]
+    document_ids = this_turn_documents + [
+        i for i in _conversation_document_ids(conversation) if i not in this_turn_documents
+    ]
+    if document_ids:
+        document_context = _document_context(org_id, document_ids, message)
+        if document_context:
+            system_prompt += f"\n\n{document_context}"
 
     if image_data_uris and vision_ok:
         user_content: Any = [{"type": "text", "text": message}]
@@ -707,54 +858,78 @@ async def run_copilot_turn(
 
     tool_records: list[dict[str, Any]] = []
     final_content = ""
+    reasoning = _reasoning_kwargs(provider, model)
 
     try:
         for _ in range(max(1, settings.COPILOT_MAX_TOOL_ITERATIONS)):
-            stream = None
-            async for item in _create_completion_with_recovery(
-                lambda: client.chat.completions.create(
-                    model=model,
-                    messages=messages,
-                    tools=TOOL_SPECS,
-                    tool_choice="auto",
-                    stream=True,
-                    max_tokens=settings.COPILOT_MAX_OUTPUT_TOKENS,
-                ),
-                shrink_coro=lambda: client.chat.completions.create(
-                    model=model,
-                    messages=messages,
-                    tools=TOOL_SPECS,
-                    tool_choice="auto",
-                    stream=True,
-                    max_tokens=min(_SHRUNK_MAX_TOKENS, settings.COPILOT_MAX_OUTPUT_TOKENS),
-                ),
-            ):
-                if isinstance(item, str):
-                    yield item
-                else:
-                    stream = item
+            # Groq can abort a stream partway with "Failed to parse tool call
+            # arguments as JSON" (gpt-oss writing a malformed draft). That
+            # surfaces while reading the stream, after _create_completion_with_
+            # recovery has returned, so it is retried here: the whole round again,
+            # as long as no text has reached the user yet.
+            for round_attempt in range(_MAX_AUTO_RETRY_ATTEMPTS + 1):
+                stream = None
+                async for item in _create_completion_with_recovery(
+                    lambda: client.chat.completions.create(
+                        model=model,
+                        messages=messages,
+                        tools=TOOL_SPECS,
+                        tool_choice="auto",
+                        stream=True,
+                        max_tokens=settings.COPILOT_MAX_OUTPUT_TOKENS,
+                        **reasoning,
+                    ),
+                    shrink_coro=lambda: client.chat.completions.create(
+                        model=model,
+                        messages=messages,
+                        tools=TOOL_SPECS,
+                        tool_choice="auto",
+                        stream=True,
+                        max_tokens=min(_SHRUNK_MAX_TOKENS, settings.COPILOT_MAX_OUTPUT_TOKENS),
+                        **reasoning,
+                    ),
+                ):
+                    if isinstance(item, str):
+                        yield item
+                    else:
+                        stream = item
 
-            accumulated = ""
-            tool_calls_acc: dict[int, dict[str, Any]] = {}
-            finish_reason: str | None = None
+                accumulated = ""
+                tool_calls_acc: dict[int, dict[str, Any]] = {}
+                finish_reason: str | None = None
 
-            async for chunk in stream:
-                choice = chunk.choices[0]
-                if choice.finish_reason:
-                    finish_reason = choice.finish_reason
-                delta = choice.delta
-                if delta and delta.content:
-                    accumulated += delta.content
-                    yield _sse({"type": "token", "text": delta.content})
-                if delta and delta.tool_calls:
-                    for tc in delta.tool_calls:
-                        entry = tool_calls_acc.setdefault(tc.index, {"id": None, "name": "", "arguments": ""})
-                        if tc.id:
-                            entry["id"] = tc.id
-                        if tc.function and tc.function.name:
-                            entry["name"] += tc.function.name
-                        if tc.function and tc.function.arguments:
-                            entry["arguments"] += tc.function.arguments
+                try:
+                    async for chunk in stream:
+                        choice = chunk.choices[0]
+                        if choice.finish_reason:
+                            finish_reason = choice.finish_reason
+                        delta = choice.delta
+                        if delta and delta.content:
+                            accumulated += delta.content
+                            yield _sse({"type": "token", "text": delta.content})
+                        if delta and delta.tool_calls:
+                            for tc in delta.tool_calls:
+                                entry = tool_calls_acc.setdefault(tc.index, {"id": None, "name": "", "arguments": ""})
+                                if tc.id:
+                                    entry["id"] = tc.id
+                                if tc.function and tc.function.name:
+                                    entry["name"] += tc.function.name
+                                if tc.function and tc.function.arguments:
+                                    entry["arguments"] += tc.function.arguments
+                except APIError as exc:
+                    if round_attempt < _MAX_AUTO_RETRY_ATTEMPTS and not accumulated and _is_transient_tool_call_error(exc):
+                        yield _sse(
+                            {
+                                "type": "retry_wait",
+                                "seconds": _TOOL_CALL_ERROR_RETRY_DELAY_S,
+                                "message": "The model provider had a brief generation error — retrying automatically…",
+                            }
+                        )
+                        async for heartbeat in _sleep_with_heartbeats(_TOOL_CALL_ERROR_RETRY_DELAY_S):
+                            yield heartbeat
+                        continue
+                    raise
+                break
 
             if finish_reason == "tool_calls" and tool_calls_acc:
                 ordered = [tool_calls_acc[i] for i in sorted(tool_calls_acc)]
@@ -772,6 +947,7 @@ async def run_copilot_turn(
                         ],
                     }
                 )
+                draft_reply = ""
                 for entry in ordered:
                     name = entry["name"]
                     try:
@@ -814,9 +990,23 @@ async def run_copilot_turn(
                             "content": json.dumps(result, default=str)[:3000],
                         }
                     )
+                    if ok and name in _DRAFT_REPLIES and isinstance(result.get("draft_id"), str):
+                        draft_reply = _draft_reply(name, result)
+                if draft_reply:
+                    final_content = (accumulated + "\n\n" if accumulated.strip() else "") + draft_reply
+                    yield _sse({"type": "token", "text": ("\n\n" if accumulated.strip() else "") + draft_reply})
+                    break
                 continue
 
             final_content = accumulated
+            if not final_content.strip() and finish_reason == "length":
+                # The whole budget went before any answer: say so instead of
+                # leaving an empty bubble.
+                final_content = (
+                    "I ran out of room before I could answer that. Try again, or ask for "
+                    "one thing at a time."
+                )
+                yield _sse({"type": "token", "text": final_content})
             break
         else:
             final_content = (
@@ -851,6 +1041,7 @@ async def run_copilot_turn(
                         "created_at": now,
                         "tool_calls": [],
                         "attachments": attachment_refs,
+                        **({"image_description": image_description} if image_description else {}),
                     },
                     {
                         "role": "assistant",
