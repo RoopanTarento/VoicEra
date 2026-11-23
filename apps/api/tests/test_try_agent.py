@@ -223,3 +223,31 @@ def test_connected_providers_come_first(monkeypatch):
     models = try_stack.build_models("en", {"groq"}, fixed=True)
     assert models["llm_config"]["provider"] == "groq"
     assert models["llm_config"]["model"] != try_stack.PREVIEW_LLM_MODELS["openai"]
+
+
+def test_text_model_falls_back_to_a_lent_provider(client, secure_db, monkeypatch):
+    """No TRY key, but the platform lends Groq: the preview uses Groq with its preview model."""
+    import app.config as config_module
+
+    def put(name, value):
+        # Other test modules may have swapped app.config.settings; set both copies.
+        for target in {id(try_agent.settings): try_agent.settings, id(config_module.settings): config_module.settings}.values():
+            monkeypatch.setattr(target, name, value)
+
+    for name, value in {
+        "TRY_LLM_PROVIDER": "openai", "TRY_LLM_API_KEY": "", "TRY_KEY_ORG_ID": "", "KB_EMBEDDING_API_KEY": "",
+        "COPILOT_LLM_PROVIDER": "openai", "COPILOT_LLM_API_KEY": "", "DEFAULT_PROVIDERS_ORG_ID": "",
+    }.items():
+        put(name, value)
+    assert try_agent.resolve_text_model() is None
+    put("DEFAULT_PROVIDERS_ORG_ID", "lender01")
+    put("DEFAULT_PROVIDERS", "groq")
+    auth_service.upsert_provider_auth("lender01", "groq", {"api_key": "gsk_test_000000000000000000000000000000000000"})
+    provider, model, key, source = try_agent.resolve_text_model()
+    assert (provider, model) == ("groq", "openai/gpt-oss-120b") and key.startswith("gsk_test") and "DEFAULT_PROVIDERS" in source
+
+
+def test_missing_text_model_says_so(client, monkeypatch):
+    monkeypatch.setattr(try_agent, "resolve_text_model", lambda: None)
+    r = client.post("/api/v1/try/agent", json=KN)
+    assert r.status_code == 503 and "AI model" in r.json()["detail"]

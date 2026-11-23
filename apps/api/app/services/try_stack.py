@@ -118,7 +118,8 @@ def build_models(language: str, usable: set[str], *, fixed: bool = False) -> dic
     llm = _pick(Kind.LLM, None, llm_pref, usable, "AI model", fixed=fixed)
     # Same model as the preview's own text (greeting, translations), never the
     # provider catalog's default, which a key may not have.
-    llm_model = ((settings.TRY_LLM_MODEL or "").strip() or PREVIEW_LLM_MODELS.get(llm, "")) if llm_pref and llm == llm_pref[0] else ""
+    custom = (settings.TRY_LLM_MODEL or "").strip() if llm_pref and llm == llm_pref[0] else ""
+    llm_model = custom or PREVIEW_LLM_MODELS.get(llm, "")
     return {
         "stt_config": {"kind": "stt", **model_config(Kind.STT, stt, language)},
         "tts_config": {"kind": "tts", **model_config(Kind.TTS, tts, language)},

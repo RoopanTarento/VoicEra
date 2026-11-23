@@ -218,25 +218,49 @@ def _org_key(org_id: str, provider: str) -> str:
         return ""
 
 
+def text_model_candidates() -> list[str]:
+    """Providers the preview may use for its own text, in order: TRY_LLM_PROVIDER,
+    then any the platform lends (DEFAULT_PROVIDERS), then the Agent Builder's."""
+    order = [(settings.TRY_LLM_PROVIDER or "openai").strip().lower()]
+    order += sorted(auth_service.lent_providers())
+    order.append((settings.COPILOT_LLM_PROVIDER or "").strip().lower())
+    return [p for p in dict.fromkeys(order) if p in _BASE_URLS]
+
+
+def resolve_text_model() -> tuple[str, str, str, str] | None:
+    """(provider, model, key, where the key came from) for the first candidate
+    with a key, or None. Never logs or returns the key outside this module."""
+    try_provider = (settings.TRY_LLM_PROVIDER or "openai").strip().lower()
+    for provider in text_model_candidates():
+        sources: list[tuple[str, str]] = []
+        if provider == try_provider:
+            sources.append(("TRY_LLM_API_KEY", settings.TRY_LLM_API_KEY.strip()))
+            if settings.TRY_KEY_ORG_ID.strip():
+                sources.append(("TRY_KEY_ORG_ID workspace", _org_key(settings.TRY_KEY_ORG_ID.strip(), provider)))
+        sources.append(("DEFAULT_PROVIDERS_ORG_ID workspace", _auth_key(auth_service.default_provider_auth(provider))))
+        if provider == "openai":
+            sources.append(("KB_EMBEDDING_API_KEY", settings.KB_EMBEDDING_API_KEY.strip()))
+        if provider == (settings.COPILOT_LLM_PROVIDER or "").strip().lower():
+            sources.append(("COPILOT_LLM_API_KEY", settings.COPILOT_LLM_API_KEY.strip()))
+        for source, key in sources:
+            if key:
+                custom = (settings.TRY_LLM_MODEL or "").strip() if provider == try_provider else ""
+                return provider, custom or _DEFAULT_MODELS[provider], key, source
+    return None
+
+
 def _client() -> tuple[AsyncOpenAI, str, str]:
-    provider = (settings.TRY_LLM_PROVIDER or "openai").strip().lower()
-    if provider not in _BASE_URLS:
-        raise TryError("The preview isn't set up on this server.", status_code=503)
-    key = settings.TRY_LLM_API_KEY.strip()
-    if not key and settings.TRY_KEY_ORG_ID.strip():
-        key = _org_key(settings.TRY_KEY_ORG_ID.strip(), provider)
-    if not key:
-        key = _auth_key(auth_service.default_provider_auth(provider))
-    if not key and provider == "openai":
-        key = settings.KB_EMBEDDING_API_KEY.strip()
-    if not key and provider == (settings.COPILOT_LLM_PROVIDER or "").strip().lower():
-        key = settings.COPILOT_LLM_API_KEY.strip()
-    if not key:
-        raise TryError("The preview isn't set up on this server.", status_code=503)
+    found = resolve_text_model()
+    if not found:
+        logger.warning(
+            "Try-agent has no AI model key: set DEFAULT_PROVIDERS_ORG_ID and DEFAULT_PROVIDERS, "
+            "or TRY_LLM_API_KEY (run `python -m app.services.try_check` on the API server)"
+        )
+        raise TryError("The preview's AI model isn't set up on this server yet.", status_code=503)
+    provider, model, key, _source = found
     kwargs: dict[str, Any] = {"api_key": key, "max_retries": 1, "timeout": 30}
     if _BASE_URLS[provider]:
         kwargs["base_url"] = _BASE_URLS[provider]
-    model = (settings.TRY_LLM_MODEL or "").strip() or _DEFAULT_MODELS[provider]
     return AsyncOpenAI(**kwargs), provider, model
 
 
