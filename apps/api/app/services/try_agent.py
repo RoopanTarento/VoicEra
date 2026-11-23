@@ -1,22 +1,31 @@
-"""Try a scheme discovery agent before signing up.
+"""Build and test-call a scheme discovery agent before signing up (/try).
 
-A visitor picks built-in schemes and a language, gets the same agent text a
-signed-in user would get (``use_cases.build_preset``), and can chat with it.
-Nothing is stored except per-IP usage counts. The chat runs on a platform
-key, so it is bounded three ways:
+A visitor picks built-in schemes and a language and gets the same agent a
+signed-in user would get (``use_cases.build_preset``). For the test call the
+server creates a short-lived copy of that agent in a hidden preview
+workspace, on a fixed stack (``try_stack``), and the browser calls it through
+the normal voice runtime. After sign-in, ``save_to_workspace`` creates the
+real agent in the visitor's own workspace.
 
-- The system prompt is always rebuilt on the server from scheme ids; the
-  browser can't send its own prompt, so this is not an open LLM proxy.
-- Short conversations: at most ``MAX_MESSAGES`` messages of ``MAX_CHARS``.
-- Usage caps: ``TRY_TURNS_PER_IP_HOUR`` replies per visitor IP per hour and
-  ``TRY_TURNS_PER_DAY`` replies across everyone per day. Both are counted in
-  ``TryTurns`` (shared by every API process; entries expire after a day).
+Everything here runs on platform keys, so it is bounded:
+
+- Prompts are always rebuilt on the server from scheme ids; the browser can't
+  send its own, so none of this is an open LLM or voice proxy.
+- Preview agents expire after ``TRY_AGENT_TTL_MINUTES`` and need the random
+  preview token returned when they were made.
+- Usage caps per visitor IP per hour and across everyone per day, counted in
+  ``TryTurns`` (shared by every API process; entries expire after a day):
+  ``turn`` for text work (greeting, transcript translation, call summary) and
+  ``call`` for test calls.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import re
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -24,29 +33,40 @@ from openai import AsyncOpenAI
 
 from app.config import settings
 from app.database import get_database
-from app.services import auth_service, use_cases
+from app.services import auth_service, org_service, try_stack, use_cases
 
 logger = logging.getLogger(__name__)
 
 COLLECTION = "TryTurns"
-MAX_MESSAGES = 24
+PREVIEW_ORG_ID = "voicera-preview"
+PREVIEW_ORG_NAME = "Public preview (system)"
+PREVIEW_CREATOR = "preview@voicera.internal"
+MAX_TEXTS = 12
 MAX_CHARS = 600
-MAX_REPLY_TOKENS = 400
+MAX_TRANSCRIPT_TURNS = 60
+MAX_GREETING_CHARS = 300
+MAX_REPLY_TOKENS = 600
 
-# Languages offered on the try page (codes match apps/providers/languages.py).
-LANGUAGES: dict[str, str] = {
-    "hi": "Hindi",
-    "en": "English",
-    "bn": "Bengali",
-    "ta": "Tamil",
-    "te": "Telugu",
-    "kn": "Kannada",
-    "ml": "Malayalam",
-    "mr": "Marathi",
-    "gu": "Gujarati",
-    "pa": "Punjabi",
-    "od": "Odia",
-}
+# Offered on the try page, in the order shown (codes match apps/providers/languages.py).
+LANGUAGES: list[tuple[str, str, str]] = [
+    ("kn", "Kannada", "ಕನ್ನಡ"),
+    ("hi", "Hindi", "हिन्दी"),
+    ("en", "English", "English"),
+    ("mr", "Marathi", "मराठी"),
+    ("ta", "Tamil", "தமிழ்"),
+    ("te", "Telugu", "తెలుగు"),
+    ("bn", "Bengali", "বাংলা"),
+    ("gu", "Gujarati", "ગુજરાતી"),
+    ("ml", "Malayalam", "മലയാളം"),
+    ("pa", "Punjabi", "ਪੰਜਾਬੀ"),
+    ("od", "Odia", "ଓଡ଼ିଆ"),
+]
+_LANGUAGE_NAMES = {code: name for code, name, _ in LANGUAGES}
+
+# The preset's greeting names the caller's organisation; a preview has none.
+PREVIEW_WELCOME = "Namaste! I'm an assistant who shares information about government schemes. Is this a good time to talk?"
+
+OUTCOMES = ("Shared how to apply", "Checked eligibility", "Not eligible for these schemes", "Call ended early")
 
 _BASE_URLS: dict[str, str | None] = {
     "openai": None,
@@ -55,24 +75,23 @@ _BASE_URLS: dict[str, str | None] = {
 }
 _DEFAULT_MODELS = {"openai": "gpt-4.1-mini", "groq": "openai/gpt-oss-120b", "openrouter": "openai/gpt-4.1-mini"}
 
-# Played as if the agent had phoned the visitor; the preset is written for a call.
-_CHAT_FRAME = (
-    "This is a text preview of the voice agent above, shown on a website to someone "
-    "trying it out. Behave exactly as you would on the call and keep every reply short "
-    "(two or three sentences, as if spoken). If they ask about something outside these "
-    "schemes, say what you can help with."
-)
-# The visitor picked a language to hear; most will type in English, so the
-# preview answers in that language regardless and adds an English line.
-_LANGUAGE_RULE = (
-    "Always reply in {language}, in its own script, even when they write in English "
-    "or another language. After your reply, write a line containing only --- and then "
-    "an English translation of your reply."
-)
-_GREETING_PROMPT = (
+_TRANSLATE_TO_PROMPT = (
     "Translate this opening line of a phone call into natural spoken {language}, in its "
-    "own script. Reply with only the translation.\n\n{welcome}"
+    "own script. Reply with only the translation.\n\n{text}"
 )
+_TRANSLATE_FROM_PROMPT = (
+    "Translate each numbered line from a phone call into plain English. Keep the "
+    "numbers. Reply with only the numbered translations, one per line.\n\n{lines}"
+)
+_SUMMARY_PROMPT = """A citizen just had a test call with a government scheme discovery agent.
+Schemes the agent knows (id: name): {schemes}
+
+Transcript:
+{transcript}
+
+Reply with only JSON: {{"fit": [ids of schemes the agent said may fit the caller],
+"explained": [ids of other schemes it explained], "outcome": one of {outcomes}}}.
+Use only ids from the list. If nothing was explained, use empty lists and "Call ended early"."""
 
 
 class TryError(Exception):
@@ -103,73 +122,84 @@ def _collection():
     return col
 
 
+# --- catalogue and agent text ----------------------------------------------------------
+
+
 def catalogue() -> dict[str, Any]:
     """Built-in schemes (no organisation's own) and the offered languages."""
     data = use_cases.catalogue("")
-    keep = ("id", "name", "category", "summary", "benefit", "questions", "kind", "pack_name", "last_checked")
+    keep = ("id", "name", "category", "summary", "benefit")
     schemes = [{k: s.get(k) for k in keep} for s in data["schemes"] if not s.get("custom")]
     discovery = next((i for i in data["intents"] if i["id"] == "discovery"), None)
     return {
         "schemes": schemes,
-        "languages": [{"code": c, "name": n} for c, n in LANGUAGES.items()],
+        "languages": [{"code": c, "name": n, "native": native} for c, n, native in LANGUAGES],
         "max_schemes": discovery.get("max_schemes") if discovery else None,
         "facts_checked": data.get("facts_checked"),
+        "max_call_seconds": settings.TRY_CALL_MAX_SECONDS,
     }
 
 
-def _language(code: str) -> str:
-    name = LANGUAGES.get(code)
+def language_name(code: str) -> str:
+    name = _LANGUAGE_NAMES.get(code)
     if not name:
         raise TryError("Pick one of the offered languages.")
     return name
 
 
-def build_agent(scheme_ids: list[str], language: str) -> dict[str, Any]:
-    """The discovery agent for these schemes, as a signed-in user would get it."""
-    _language(language)
+def _scheme_ids(scheme_ids: list[str]) -> list[str]:
     ids = [s for s in dict.fromkeys(scheme_ids) if isinstance(s, str)]
     builtin = {s["id"] for s in catalogue()["schemes"]}
     if not ids or any(i not in builtin for i in ids):
         raise TryError("Pick at least one of the listed schemes.")
+    return ids
+
+
+def build_agent(scheme_ids: list[str], language: str) -> dict[str, Any]:
+    """The discovery agent for these schemes, as a signed-in user would get it."""
+    language_name(language)
+    ids = _scheme_ids(scheme_ids)
     try:
         preset = use_cases.build_preset("", use_case="scheme", intent="discovery", scheme_ids=ids)
     except use_cases.UseCaseError as exc:
         raise TryError(str(exc), exc.status_code) from exc
-    return preset
+    return {**preset, "welcome": PREVIEW_WELCOME, "scheme_ids": ids}
 
 
-def check_and_count(ip: str | None) -> None:
-    """Refuse when this visitor or everyone together is over budget; else record one reply."""
+def _clean_greeting(greeting: str | None) -> str | None:
+    text = re.sub(r"\s+", " ", (greeting or "")).strip()
+    if not text:
+        return None
+    if len(text) > MAX_GREETING_CHARS:
+        raise TryError(f"Keep the greeting under {MAX_GREETING_CHARS} characters.")
+    return text
+
+
+# --- usage caps ------------------------------------------------------------------------
+
+
+_BUCKETS = {
+    "turn": ("TRY_TURNS_PER_IP_HOUR", "TRY_TURNS_PER_DAY"),
+    "call": ("TRY_CALLS_PER_IP_HOUR", "TRY_CALLS_PER_DAY"),
+}
+
+
+def check_and_count(ip: str | None, bucket: str = "turn") -> None:
+    """Refuse when this visitor or everyone together is over the bucket's budget; else count one."""
+    per_ip, per_day = (getattr(settings, name) for name in _BUCKETS[bucket])
     col = _collection()
     now = _now()
-    total = col.count_documents({"key": "all", "at": {"$gte": now - timedelta(days=1)}})
-    if total >= settings.TRY_TURNS_PER_DAY:
-        raise TryLimited("The free preview is busy today. Sign up to keep building your agent.")
+    if col.count_documents({"key": f"all:{bucket}", "at": {"$gte": now - timedelta(days=1)}}) >= per_day:
+        raise TryLimited("The free preview is busy today. Sign in to keep building your agent.")
     if ip:
-        mine = col.count_documents({"key": f"ip:{ip}", "at": {"$gte": now - timedelta(hours=1)}})
-        if mine >= settings.TRY_TURNS_PER_IP_HOUR:
-            raise TryLimited("That's the end of the free preview for now. Sign up to keep talking to your agent.")
-        col.insert_one({"key": f"ip:{ip}", "at": now})
-    col.insert_one({"key": "all", "at": now})
+        mine = col.count_documents({"key": f"ip:{bucket}:{ip}", "at": {"$gte": now - timedelta(hours=1)}})
+        if mine >= per_ip:
+            raise TryLimited("That's the end of the free preview for now. Sign in to keep testing your agent.")
+        col.insert_one({"key": f"ip:{bucket}:{ip}", "at": now})
+    col.insert_one({"key": f"all:{bucket}", "at": now})
 
 
-def _clean_messages(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
-    if not messages:
-        raise TryError("Say something to the agent first.")
-    if len(messages) > MAX_MESSAGES:
-        raise TryLimited("That's the end of the preview chat. Sign up to keep talking to your agent.")
-    cleaned: list[dict[str, str]] = []
-    for m in messages:
-        role = m.get("role")
-        content = str(m.get("content") or "").strip()
-        if role not in ("user", "assistant") or not content:
-            raise TryError("Couldn't read the conversation.")
-        if len(content) > MAX_CHARS:
-            raise TryError(f"Keep each message under {MAX_CHARS} characters.")
-        cleaned.append({"role": role, "content": content})
-    if cleaned[-1]["role"] != "user":
-        raise TryError("Say something to the agent first.")
-    return cleaned
+# --- text model ------------------------------------------------------------------------
 
 
 def _auth_key(stored: dict[str, Any] | None) -> str:
@@ -210,63 +240,225 @@ def _client() -> tuple[AsyncOpenAI, str, str]:
     return AsyncOpenAI(**kwargs), provider, model
 
 
-def _split(text: str) -> tuple[str, str | None]:
-    """A reply and its English line (after ---, which the model doesn't always put on its own line)."""
-    parts = re.split(r"\s*-{3,}\s*", text.strip(), maxsplit=1)
-    reply = parts[0].strip()
-    english = parts[1].strip() if len(parts) > 1 else ""
-    if not reply:  # separator first: nothing in the chosen language
-        return english, None
-    return reply, english or None
-
-
-async def _complete(client: AsyncOpenAI, provider: str, model: str, messages: list[dict[str, str]]) -> str:
+async def _complete(prompt: str) -> str:
+    client, provider, model = _client()
     extra: dict[str, Any] = {}
     if "gpt-oss" in model:
         extra = {"extra_body": {"reasoning": {"effort": "low"}}} if provider == "openrouter" else {"reasoning_effort": "low"}
     try:
         response = await client.chat.completions.create(
-            model=model, messages=messages, max_tokens=MAX_REPLY_TOKENS, temperature=0.4, **extra
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=MAX_REPLY_TOKENS,
+            temperature=0.2,
+            **extra,
         )
     except Exception as exc:
-        logger.warning("Try-agent chat failed provider=%s model=%s: %s", provider, model, type(exc).__name__)
-        raise TryError("The agent couldn't answer just now. Try again in a moment.", status_code=502) from exc
+        logger.warning("Try-agent text call failed provider=%s model=%s: %s", provider, model, type(exc).__name__)
+        raise TryError("That didn't work just now. Try again in a moment.", status_code=502) from exc
     text = (response.choices[0].message.content or "").strip()
     if not text:
-        raise TryError("The agent couldn't answer just now. Try again in a moment.", status_code=502)
+        raise TryError("That didn't work just now. Try again in a moment.", status_code=502)
     return text
 
 
-async def greeting(scheme_ids: list[str], language: str, ip: str | None) -> dict[str, str | None]:
-    """The agent's opening line in the chosen language, with the English original."""
+async def opening_line(scheme_ids: list[str], language: str, ip: str | None) -> dict[str, Any]:
+    """Agent name, its opening line in ``language`` (with the English) and the scheme count."""
     agent = build_agent(scheme_ids, language)
-    name = _language(language)
-    if language == "en":
-        return {"reply": agent["welcome"], "english": None}
-    client, provider, model = _client()
-    check_and_count(ip)
-    text = await _complete(
-        client, provider, model,
-        [{"role": "user", "content": _GREETING_PROMPT.format(language=name, welcome=agent["welcome"])}],
-    )
-    return {"reply": _split(text)[0], "english": agent["welcome"]}
-
-
-async def chat(
-    scheme_ids: list[str], language: str, messages: list[dict[str, Any]], ip: str | None
-) -> dict[str, str | None]:
-    """The agent's next reply (and its English line). ``messages`` starts after its greeting."""
-    agent = build_agent(scheme_ids, language)
-    name = _language(language)
-    history = _clean_messages(messages)
-    client, provider, model = _client()
-    check_and_count(ip)
-    system = agent["prompt"] + "\n\n" + _CHAT_FRAME
+    greeting = agent["welcome"]
     if language != "en":
-        system += " " + _LANGUAGE_RULE.format(language=name)
+        check_and_count(ip, "turn")
+        greeting = await _complete(_TRANSLATE_TO_PROMPT.format(language=language_name(language), text=agent["welcome"]))
+        greeting = greeting.strip().strip('"“”')
+    return {
+        "name": agent["name"],
+        "greeting": greeting,
+        "english": agent["welcome"] if language != "en" else None,
+        "scheme_ids": agent["scheme_ids"],
+    }
+
+
+async def to_english(language: str, texts: list[str], ip: str | None) -> list[str | None]:
+    """English lines for transcript lines spoken in ``language`` (None where empty)."""
+    language_name(language)
+    if not texts:
+        return []
+    if len(texts) > MAX_TEXTS:
+        raise TryError(f"Send at most {MAX_TEXTS} lines at a time.")
+    lines = [re.sub(r"\s+", " ", t or "").strip()[:MAX_CHARS] for t in texts]
+    if language == "en":
+        return [None for _ in lines]
+    check_and_count(ip, "turn")
+    numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(lines))
+    text = await _complete(_TRANSLATE_FROM_PROMPT.format(lines=numbered))
+    found: dict[int, str] = {}
+    for row in text.splitlines():
+        m = re.match(r"\s*(\d+)[.)]\s*(.+)", row)
+        if m:
+            found[int(m.group(1))] = m.group(2).strip()
+    return [found.get(i + 1) if lines[i] else None for i in range(len(lines))]
+
+
+async def summarise(scheme_ids: list[str], transcript: list[dict[str, Any]], ip: str | None) -> dict[str, Any]:
+    """Which schemes may fit, which were also explained, and how the call ended."""
+    ids = _scheme_ids(scheme_ids)
+    turns = [
+        (str(t.get("role")), re.sub(r"\s+", " ", str(t.get("text") or "")).strip()[:MAX_CHARS])
+        for t in transcript[:MAX_TRANSCRIPT_TURNS]
+        if t.get("role") in ("agent", "user")
+    ]
+    turns = [(r, t) for r, t in turns if t]
+    if not any(r == "user" for r, _ in turns):
+        return {"fit": [], "explained": [], "outcome": "Call ended early"}
+    names = {s["id"]: s["name"] for s in catalogue()["schemes"] if s["id"] in ids}
+    check_and_count(ip, "turn")
     text = await _complete(
-        client, provider, model,
-        [{"role": "system", "content": system}, {"role": "assistant", "content": agent["welcome"]}, *history],
+        _SUMMARY_PROMPT.format(
+            schemes="; ".join(f"{i}: {n}" for i, n in names.items()),
+            transcript="\n".join(f"{'Agent' if r == 'agent' else 'Caller'}: {t}" for r, t in turns),
+            outcomes=", ".join(f'"{o}"' for o in OUTCOMES),
+        )
     )
-    reply, english = _split(text)
-    return {"reply": reply, "english": english if language != "en" else None}
+    match = re.search(r"\{.*\}", text, re.S)
+    try:
+        data = json.loads(match.group(0)) if match else {}
+    except json.JSONDecodeError:
+        data = {}
+    fit = [i for i in dict.fromkeys(data.get("fit") or []) if i in names]
+    explained = [i for i in dict.fromkeys(data.get("explained") or []) if i in names and i not in fit]
+    outcome = data.get("outcome") if data.get("outcome") in OUTCOMES else "Call ended early"
+    return {"fit": fit, "explained": explained, "outcome": outcome}
+
+
+# --- test call -------------------------------------------------------------------------
+
+
+def _ensure_preview_org() -> None:
+    if not org_service.get_organisation(PREVIEW_ORG_ID):
+        org_service.create_organisation(name=PREVIEW_ORG_NAME, created_by_email=PREVIEW_CREATOR, org_id=PREVIEW_ORG_ID)
+        get_database()["Organizations"].update_one(
+            {"org_id": PREVIEW_ORG_ID}, {"$set": {"status": "active", "system": "try_preview"}}
+        )
+
+
+def _token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def _sweep_expired() -> None:
+    """Remove preview agents past their expiry (they're never shown to anyone)."""
+    get_database()["Agents"].delete_many(
+        {"org_id": PREVIEW_ORG_ID, "try_preview.expires_at": {"$lt": _now().isoformat()}}
+    )
+
+
+def stack_for(language: str, org_id: str = PREVIEW_ORG_ID) -> dict[str, dict[str, Any]]:
+    try:
+        return try_stack.build_models(language, set(auth_service.available_providers(org_id)))
+    except try_stack.StackError as exc:
+        raise TryError(f"Test calls in {language_name(language)} aren't available yet. {exc}", status_code=503) from exc
+
+
+def _agent_config(agent: dict[str, Any], language: str, greeting: str, models: dict[str, Any], *, preview: bool) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "prompts": {"system_prompt": agent["prompt"], "greeting_message": greeting},
+        "behaviour": {
+            "interruption_min_words": 0,
+            "user_silence_hangup_seconds": 20 if preview else 30,
+            "call_timeout_seconds": settings.TRY_CALL_MAX_SECONDS if preview else None,
+            "ignore_user_speech_before_greeting": False,
+            "hold_messages": [],
+            "hold_message_timeout_seconds": None,
+            "user_online_detection_enabled": False,
+            "user_online_detection_message": "",
+            "user_online_detection_seconds": None,
+            "user_online_detection_repeats": None,
+            "user_online_detection_closing_message": "",
+            "automatic_call_ending": {"enabled": True, "graceful_llm_call_ending": True},
+        },
+        "language": {"primary": language, "secondary": []},
+        "models": models,
+        "knowledge_base": {"enabled": False, "mode": "context", "document_ids": [], "top_k": 5},
+        "custom_variables": {},
+        "use_case": agent.get("use_case"),
+    }
+
+
+async def _create(org_id: str, email: str, name: str, config: dict[str, Any]) -> dict[str, Any]:
+    from app.models.schemas import AgentCreateRequest
+    from app.services import agent_service
+
+    payload = AgentCreateRequest(name=name, agent_category="websocket", config=config)
+    try:
+        return await agent_service.create_agent(org_id, email, payload)
+    except agent_service.AgentConfigValidationError as exc:
+        logger.warning("Try-agent config rejected: %s", exc)
+        raise TryError("Couldn't set up the agent's voice. Try another language.", status_code=503) from exc
+
+
+async def prepare_call(scheme_ids: list[str], language: str, greeting: str | None, ip: str | None) -> dict[str, Any]:
+    """A short-lived agent the browser can call, on the fixed preview stack."""
+    agent = build_agent(scheme_ids, language)
+    opening = _clean_greeting(greeting) or agent["welcome"]
+    _ensure_preview_org()
+    models = stack_for(language)
+    check_and_count(ip, "call")
+    _sweep_expired()
+    created = await _create(
+        PREVIEW_ORG_ID, PREVIEW_CREATOR, agent["name"][:80], _agent_config(agent, language, opening, models, preview=True)
+    )
+    token = secrets.token_urlsafe(24)
+    expires = _now() + timedelta(minutes=settings.TRY_AGENT_TTL_MINUTES)
+    get_database()["Agents"].update_one(
+        {"org_id": PREVIEW_ORG_ID, "agent_id": created["agent_id"]},
+        {"$set": {"try_preview": {"token_hash": _token_hash(token), "expires_at": expires.isoformat()}}},
+    )
+    return {
+        "org_id": PREVIEW_ORG_ID,
+        "agent_id": created["agent_id"],
+        "preview_token": token,
+        "expires_at": expires.isoformat(),
+        "max_call_seconds": settings.TRY_CALL_MAX_SECONDS,
+        "stack": try_stack.describe(models),
+    }
+
+
+def stack_names(language: str) -> dict[str, str]:
+    """What the preview call runs on for ``language`` (shown while it's being set up)."""
+    language_name(language)
+    _ensure_preview_org()
+    return try_stack.describe(stack_for(language))
+
+
+def register_call(agent_id: str, preview_token: str) -> dict[str, Any]:
+    """A call id for a preview agent this visitor made (checked by its token)."""
+    from app.services import web_call_service
+
+    doc = get_database()["Agents"].find_one({"org_id": PREVIEW_ORG_ID, "agent_id": agent_id}, {"try_preview": 1})
+    meta = (doc or {}).get("try_preview") or {}
+    if not doc or not preview_token or not secrets.compare_digest(meta.get("token_hash", ""), _token_hash(preview_token)):
+        raise TryError("This test agent has expired. Create it again.", status_code=404)
+    if str(meta.get("expires_at") or "") < _now().isoformat():
+        raise TryError("This test agent has expired. Create it again.", status_code=404)
+    try:
+        call = web_call_service.register_web_call(PREVIEW_ORG_ID, agent_id)
+    except web_call_service.WebCallError as exc:
+        raise TryError(exc.message, exc.status_code) from exc
+    return {"org_id": PREVIEW_ORG_ID, "agent_id": agent_id, "call_id": call["call_id"]}
+
+
+# --- after sign-in ---------------------------------------------------------------------
+
+
+async def save_to_workspace(
+    org_id: str, email: str, scheme_ids: list[str], language: str, greeting: str | None
+) -> dict[str, Any]:
+    """Create the tried agent in the signed-in user's workspace, on the providers it can use."""
+    agent = build_agent(scheme_ids, language)
+    try:
+        models = try_stack.build_models(language, set(auth_service.available_providers(org_id)))
+    except try_stack.StackError as exc:
+        raise TryError(str(exc), status_code=409) from exc
+    opening = _clean_greeting(greeting) or agent["welcome"]
+    return await _create(org_id, email, agent["name"][:80], _agent_config(agent, language, opening, models, preview=False))

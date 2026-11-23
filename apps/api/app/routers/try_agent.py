@@ -1,12 +1,13 @@
-"""Public preview: build and chat with a scheme discovery agent without signing up."""
+"""Public preview: build and test-call a scheme discovery agent without signing up."""
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal, Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from app.auth import get_current_user
 from app.config import settings
 from app.services import try_agent
 
@@ -14,18 +15,32 @@ router = APIRouter(prefix="/try", tags=["try"])
 
 
 class AgentRequest(BaseModel):
-    scheme_ids: list[str] = Field(min_length=1, max_length=10)
+    scheme_ids: list[str] = Field(min_length=1, max_length=16)
     language: str = Field(min_length=1, max_length=8)
 
 
-class ChatMessage(BaseModel):
-    role: str = Field(max_length=16)
-    content: str = Field(max_length=try_agent.MAX_CHARS * 2)
+class PrepareRequest(AgentRequest):
+    greeting: Optional[str] = Field(default=None, max_length=try_agent.MAX_GREETING_CHARS * 2)
 
 
-class ChatRequest(AgentRequest):
-    # Empty: the agent's opening line in the chosen language.
-    messages: list[ChatMessage] = Field(default_factory=list, max_length=try_agent.MAX_MESSAGES + 1)
+class CallRequest(BaseModel):
+    agent_id: str = Field(min_length=1, max_length=64)
+    preview_token: str = Field(min_length=1, max_length=128)
+
+
+class TranslateRequest(BaseModel):
+    language: str = Field(min_length=1, max_length=8)
+    texts: list[str] = Field(max_length=try_agent.MAX_TEXTS)
+
+
+class TranscriptTurn(BaseModel):
+    role: Literal["agent", "user"]
+    text: str = Field(max_length=try_agent.MAX_CHARS * 4)
+
+
+class SummaryRequest(BaseModel):
+    scheme_ids: list[str] = Field(min_length=1, max_length=16)
+    transcript: list[TranscriptTurn] = Field(max_length=try_agent.MAX_TRANSCRIPT_TURNS * 2)
 
 
 def _enabled() -> None:
@@ -55,26 +70,76 @@ async def catalogue() -> dict[str, Any]:
 
 
 @router.post("/agent")
-async def agent(body: AgentRequest) -> dict[str, Any]:
-    """Name, greeting and purpose of the agent for these schemes (the prompt stays on the server)."""
+async def agent(body: AgentRequest, request: Request) -> dict[str, Any]:
+    """Name and opening line (in the chosen language, with the English) of the
+    agent for these schemes, and what its test call runs on. The prompt stays
+    on the server."""
     _enabled()
     try:
-        preset = try_agent.build_agent(body.scheme_ids, body.language)
+        result = await try_agent.opening_line(body.scheme_ids, body.language, _client_ip(request))
+        try:
+            result["stack"] = try_agent.stack_names(body.language)
+        except try_agent.TryError as exc:
+            result["stack"] = None
+            result["stack_error"] = str(exc)
     except try_agent.TryError as exc:
         _raise(exc)
         raise
-    return {"name": preset["name"], "purpose": preset["purpose"], "welcome": preset["welcome"]}
+    return result
 
 
-@router.post("/chat")
-async def chat(body: ChatRequest, request: Request) -> dict[str, str | None]:
-    """The agent's next reply, plus an English line when it speaks another language."""
+@router.post("/prepare")
+async def prepare(body: PrepareRequest, request: Request) -> dict[str, Any]:
+    """A short-lived agent to test-call, and the token that lets this visitor call it."""
     _enabled()
-    ip = _client_ip(request)
     try:
-        if not body.messages:
-            return await try_agent.greeting(body.scheme_ids, body.language, ip)
-        return await try_agent.chat(body.scheme_ids, body.language, [m.model_dump() for m in body.messages], ip)
+        return await try_agent.prepare_call(body.scheme_ids, body.language, body.greeting, _client_ip(request))
     except try_agent.TryError as exc:
         _raise(exc)
         raise
+
+
+@router.post("/call")
+async def call(body: CallRequest) -> dict[str, Any]:
+    _enabled()
+    try:
+        return try_agent.register_call(body.agent_id, body.preview_token)
+    except try_agent.TryError as exc:
+        _raise(exc)
+        raise
+
+
+@router.post("/translate")
+async def translate(body: TranslateRequest, request: Request) -> dict[str, Any]:
+    """English lines for what was said on the test call."""
+    _enabled()
+    try:
+        return {"english": await try_agent.to_english(body.language, body.texts, _client_ip(request))}
+    except try_agent.TryError as exc:
+        _raise(exc)
+        raise
+
+
+@router.post("/summary")
+async def summary(body: SummaryRequest, request: Request) -> dict[str, Any]:
+    """Schemes that may fit, others explained, and the outcome of the test call."""
+    _enabled()
+    try:
+        return await try_agent.summarise(body.scheme_ids, [t.model_dump() for t in body.transcript], _client_ip(request))
+    except try_agent.TryError as exc:
+        _raise(exc)
+        raise
+
+
+@router.post("/save")
+async def save(body: PrepareRequest, current_user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    """After sign-in: create the tried agent in the caller's workspace."""
+    try:
+        agent_doc = await try_agent.save_to_workspace(
+            str(current_user.get("org_id") or ""), str(current_user.get("email") or ""),
+            body.scheme_ids, body.language, body.greeting,
+        )
+    except try_agent.TryError as exc:
+        _raise(exc)
+        raise
+    return {"agent_id": agent_doc["agent_id"], "name": agent_doc.get("name")}

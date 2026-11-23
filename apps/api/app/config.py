@@ -279,8 +279,22 @@ class Settings(BaseSettings):
             "TRY_LLM_API_KEY is blank (e.g. the platform team's own workspace)."
         ),
     )
-    TRY_TURNS_PER_IP_HOUR: int = Field(default=30, description="Preview replies per visitor IP per hour")
-    TRY_TURNS_PER_DAY: int = Field(default=1500, description="Preview replies across all visitors per day")
+    TRY_TURNS_PER_IP_HOUR: int = Field(
+        default=60, description="Preview text requests (greeting, transcript lines, summary) per visitor IP per hour"
+    )
+    TRY_TURNS_PER_DAY: int = Field(default=3000, description="Preview text requests across all visitors per day")
+    TRY_CALLS_PER_IP_HOUR: int = Field(default=6, description="Preview test calls per visitor IP per hour")
+    TRY_CALLS_PER_DAY: int = Field(default=300, description="Preview test calls across all visitors per day")
+    TRY_CALL_MAX_SECONDS: int = Field(default=180, description="The browser ends a preview test call after this long")
+    TRY_AGENT_TTL_MINUTES: int = Field(default=30, description="Preview agents are deleted after this long")
+    TRY_STT_PROVIDERS: str = Field(
+        default="indic_nemotron,sarvam,google,openai",
+        description="Speech recognition for preview calls, in order of preference (first available wins)",
+    )
+    TRY_TTS_PROVIDERS: str = Field(
+        default="maya2_native,indic_orpheus,sarvam,google,openai",
+        description="Voice for preview calls, in order of preference (first available wins)",
+    )
     TRY_TRUSTED_PROXY_HOPS: int = Field(
         default=1,
         description=(

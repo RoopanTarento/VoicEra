@@ -121,3 +121,36 @@ def send_invitation_email(email: str, *, org_name: str, role_label: str, invite_
     except Exception as exc:
         logger.error("Error sending invitation email: %s", exc)
         return False
+
+
+def send_login_code_email(email: str, code: str) -> bool:
+    """One-time sign-in code. Never logs the code."""
+    try:
+        if not settings.MAILTRAP_API_TOKEN:
+            logger.warning("Sign-in code email not sent: MAILTRAP_API_TOKEN not configured")
+            return False
+        text = (
+            f"Your VoicEra sign-in code is {code}.\n\n"
+            "It expires in 10 minutes. If you didn't ask for it, ignore this email."
+        )
+        html = (
+            '<div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;padding:24px;color:#14161a">'
+            '<p style="margin:0 0 12px">Your VoicEra sign-in code is</p>'
+            f'<p style="font-size:28px;font-weight:700;letter-spacing:6px;margin:0 0 16px">{code}</p>'
+            '<p style="margin:0;color:#6b7280;font-size:13px">It expires in 10 minutes. '
+            "If you didn't ask for it, ignore this email.</p></div>"
+        )
+        mail = Mail(
+            sender=Address(email=settings.MAILTRAP_FROM_EMAIL, name=settings.MAILTRAP_FROM_NAME),
+            to=[Address(email=email)],
+            subject=f"{code} is your VoicEra sign-in code",
+            text=text,
+            html=html,
+            category="Sign-in code",
+        )
+        MailtrapClient(token=settings.MAILTRAP_API_TOKEN).send(mail)
+        logger.info("Sign-in code email sent")
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Error sending sign-in code email: %s", type(exc).__name__)
+        return False

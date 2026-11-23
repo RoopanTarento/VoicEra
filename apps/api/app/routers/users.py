@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from pydantic import BaseModel, Field
 
 from app.auth import create_access_token, get_current_user, verify_api_key
 from app.database_init import ROLE_ADMIN
@@ -21,7 +22,7 @@ from app.models.schemas import (
     UserResponse,
 )
 from app.rbac import BOT_SERVICE_EMAIL  # synthetic subject for service JWTs
-from app.services import org_service, user_service
+from app.services import login_codes, org_service, user_service
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -36,6 +37,38 @@ async def sign_up(user_data: UserCreate) -> dict[str, Any]:
             detail=result["message"],
         )
     return result
+
+
+class LoginCodeRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+
+
+class LoginCodeVerify(LoginCodeRequest):
+    code: str = Field(min_length=6, max_length=12)
+
+
+def _request_ip(request: Request) -> str | None:
+    from app.routers.try_agent import _client_ip
+
+    return _client_ip(request)
+
+
+@router.post("/login-code")
+async def request_login_code(body: LoginCodeRequest, request: Request) -> dict[str, Any]:
+    """Email a one-time sign-in code. Never says whether the account exists."""
+    try:
+        return login_codes.request_code(body.email, _request_ip(request))
+    except login_codes.CodeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+
+@router.post("/login-code/verify", response_model=UserLoginResponse)
+async def verify_login_code(body: LoginCodeVerify, request: Request) -> dict[str, Any]:
+    """Sign in with the emailed code; a new email gets an account and workspace."""
+    try:
+        return login_codes.verify_code(body.email, body.code, _request_ip(request))
+    except login_codes.CodeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
 
 @router.post("/login", response_model=UserLoginResponse)
