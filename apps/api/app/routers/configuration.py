@@ -28,7 +28,7 @@ router = APIRouter(prefix="/configuration", tags=["configuration"])
 def _configured_ids(org_id: str | None) -> set[str]:
     if not org_id:
         return set()
-    return set(auth_service.list_configured_providers(org_id))
+    return set(auth_service.available_providers(org_id))
 
 
 def _with_authenticated_list(

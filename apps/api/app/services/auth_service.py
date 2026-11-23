@@ -152,3 +152,64 @@ def delete_provider_auth(org_id: str, provider: str) -> bool:
         logger.info("Provider auth deleted org=%s provider=%s", org_id, provider)
         return True
     return False
+
+
+# --- platform default providers ---------------------------------------------------
+#
+# So that a brand-new workspace can create and call an agent before it has
+# connected anything, the platform can lend the keys one workspace stored under
+# Integrations (DEFAULT_PROVIDERS_ORG_ID) for the providers in DEFAULT_PROVIDERS.
+# A workspace's own key always wins. The lent keys are only ever read on the
+# server or by the voice runtime's service token; they are never returned to a
+# workspace's own users (see routers/auth.py) and never copied into their store.
+
+
+def default_providers() -> set[str]:
+    """Providers the platform lends to workspaces, when configured."""
+    from app.config import settings
+
+    if not settings.DEFAULT_PROVIDERS_ORG_ID.strip():
+        return set()
+    from apps.telephony.schema import list_providers as list_telephony_providers
+
+    # Phone numbers and carriers belong to a workspace; only AI providers are lent.
+    telephony = set(list_telephony_providers())
+    return {p.strip().lower() for p in settings.DEFAULT_PROVIDERS.split(",") if p.strip()} - telephony
+
+
+def _defaults_source_org() -> str:
+    from app.config import settings
+
+    return settings.DEFAULT_PROVIDERS_ORG_ID.strip()
+
+
+def lent_providers() -> set[str]:
+    """Default providers the source workspace actually has keys for."""
+    wanted = default_providers()
+    if not wanted:
+        return set()
+    return wanted & set(list_configured_providers(_defaults_source_org()))
+
+
+def default_provider_auth(provider: str) -> dict[str, Any] | None:
+    """The platform's lent key for ``provider`` (server-side use only)."""
+    if provider not in default_providers():
+        return None
+    return get_provider_auth(_defaults_source_org(), provider, mask_secrets=False)
+
+
+def available_providers(org_id: str) -> list[str]:
+    """Providers usable by ``org_id``: its own plus the platform's lent ones."""
+    return sorted(set(list_configured_providers(org_id)) | lent_providers())
+
+
+def resolve_provider_auth(org_id: str, provider: str) -> dict[str, Any] | None:
+    """The key to use for ``org_id``: its own, else the platform's (server-side use only)."""
+    own = get_provider_auth(org_id, provider, mask_secrets=False)
+    if own:
+        return own
+    lent = default_provider_auth(provider)
+    if lent:
+        logger.info("Using platform default credentials org=%s provider=%s", org_id, provider)
+        return {**lent, "org_id": org_id, "platform_default": True}
+    return None

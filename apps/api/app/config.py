@@ -248,6 +248,19 @@ class Settings(BaseSettings):
         ),
     )
 
+    # Platform default providers (see auth_service "platform default providers").
+    DEFAULT_PROVIDERS_ORG_ID: str = Field(
+        default="",
+        description=(
+            "Workspace whose Integrations keys are lent to every workspace that hasn't "
+            "connected its own. Blank = off."
+        ),
+    )
+    DEFAULT_PROVIDERS: str = Field(
+        default="",
+        description="Comma-separated AI providers to lend, e.g. openai,sarvam (not telephony).",
+    )
+
     # Public "try an agent" preview (no sign-up). See app/services/try_agent.py.
     TRY_ENABLED: bool = Field(default=True, description="Serve the public /try preview endpoints")
     TRY_LLM_PROVIDER: str = Field(default="openai", description="openai, groq or openrouter")

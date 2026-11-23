@@ -24,7 +24,7 @@ from openai import AsyncOpenAI
 
 from app.config import settings
 from app.database import get_database
-from app.services import use_cases
+from app.services import auth_service, use_cases
 
 logger = logging.getLogger(__name__)
 
@@ -172,19 +172,20 @@ def _clean_messages(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
     return cleaned
 
 
-def _org_key(org_id: str, provider: str) -> str:
-    """The key an organisation connected for ``provider`` under Integrations."""
-    from app.services import auth_service
-
-    try:
-        stored = auth_service.get_provider_auth(org_id, provider, mask_secrets=False)
-    except Exception:
-        logger.warning("Try-agent couldn't read TRY_KEY_ORG_ID's %s key", provider)
-        return ""
+def _auth_key(stored: dict[str, Any] | None) -> str:
     raw = ((stored or {}).get("auth") or {}).get("api_key")
     if isinstance(raw, list):
         raw = raw[0] if raw else ""
     return str(raw or "").strip()
+
+
+def _org_key(org_id: str, provider: str) -> str:
+    """The key an organisation connected for ``provider`` under Integrations."""
+    try:
+        return _auth_key(auth_service.get_provider_auth(org_id, provider, mask_secrets=False))
+    except Exception:
+        logger.warning("Try-agent couldn't read TRY_KEY_ORG_ID's %s key", provider)
+        return ""
 
 
 def _client() -> tuple[AsyncOpenAI, str, str]:
@@ -194,6 +195,8 @@ def _client() -> tuple[AsyncOpenAI, str, str]:
     key = settings.TRY_LLM_API_KEY.strip()
     if not key and settings.TRY_KEY_ORG_ID.strip():
         key = _org_key(settings.TRY_KEY_ORG_ID.strip(), provider)
+    if not key:
+        key = _auth_key(auth_service.default_provider_auth(provider))
     if not key and provider == "openai":
         key = settings.KB_EMBEDDING_API_KEY.strip()
     if not key and provider == (settings.COPILOT_LLM_PROVIDER or "").strip().lower():

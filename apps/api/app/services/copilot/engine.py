@@ -529,7 +529,7 @@ async def _describe_images(
 def _resolve_api_key(org_id: str, provider: str) -> str:
     """Prefer the org's own stored credential for ``provider``; fall back to platform keys."""
     try:
-        stored = auth_service.get_provider_auth(org_id, provider, mask_secrets=False)
+        stored = auth_service.resolve_provider_auth(org_id, provider)
     except Exception:  # pragma: no cover - defensive; auth store issues shouldn't crash chat
         stored = None
     if stored:

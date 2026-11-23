@@ -358,7 +358,7 @@ def _openai_key(org_id: str) -> str | None:
     try:
         from app.services import auth_service
 
-        stored = auth_service.get_provider_auth(org_id, "openai", mask_secrets=False) or {}
+        stored = auth_service.resolve_provider_auth(org_id, "openai") or {}
         auth = stored.get("auth") if isinstance(stored.get("auth"), dict) else stored
         key = str(auth.get("api_key") or "").strip()
         return key or None

@@ -303,7 +303,7 @@ def list_available_providers(org_id: str) -> dict[str, Any]:
     propose_create_agent — it's the only way to know what's genuinely
     available for this org rather than guessing a plausible-sounding name.
     """
-    configured = set(auth_service.list_configured_providers(org_id))
+    configured = set(auth_service.available_providers(org_id))
     stt = [
         {"provider": p, "models": _model_examples(Kind.STT, p)}
         for p in list_providers(Kind.STT)
@@ -428,7 +428,7 @@ def _models_from_explicit_choice(
     explicitly named provider must have real, stored credentials for this
     org (checked here, not just trusted from the model's argument)."""
     base = _models_from_existing_agent_or_fallback(org_id)
-    configured = set(auth_service.list_configured_providers(org_id))
+    configured = set(auth_service.available_providers(org_id))
 
     stt = dict(base["stt_config"])
     if stt_provider:
@@ -685,7 +685,7 @@ def propose_update_agent(
         language["primary"] = primary_language.strip()
         changes.append("language")
 
-    configured = set(auth_service.list_configured_providers(org_id))
+    configured = set(auth_service.available_providers(org_id))
     models = dict(existing_config.get("models") or {})
 
     stt = dict(models.get("stt_config") or {})

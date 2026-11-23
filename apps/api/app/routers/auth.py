@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.auth import get_current_user
 from app.database_init import ROLE_ADMIN, ROLE_SUPER_ADMIN
+from app.rbac import BOT_SERVICE_EMAIL
 from app.models.schemas import (
     ProviderAuthResponse,
     ProviderAuthUpsert,
@@ -135,6 +136,10 @@ async def get_auth(
             provider,
             mask_secrets=_mask_for_user(current_user),
         )
+        # The voice runtime (service token only) gets the platform's lent key
+        # when the workspace has none of its own. People never see it.
+        if not stored and current_user.get("email") == BOT_SERVICE_EMAIL:
+            stored = auth_service.resolve_provider_auth(current_user["org_id"], provider)
     except Exception as exc:
         _catalog_http_error(exc)
         raise
