@@ -9,15 +9,12 @@ default (voice, speed, ...), so these agents match what the wizard creates.
 
 from __future__ import annotations
 
-import logging
 from typing import Any
 
 from app.config import settings
 from apps.providers.availability import is_authenticated
 from apps.providers.base import Kind
 from apps.providers.schema import list_providers, provider_settings
-
-logger = logging.getLogger(__name__)
 
 _NON_FIELD_KEYS = {"model", "language"}
 
@@ -91,31 +88,26 @@ def model_config(kind: Kind, provider: str, language: str | None, model: str | N
     return out
 
 
-def _pick(kind: Kind, language: str | None, preferred: list[str], usable: set[str], label: str, *, fixed: bool) -> str:
-    """The first connected provider in preference order. With ``fixed`` (the
-    preview's fixed stack) and none reported as connected, the first preferred
-    provider that supports the language is used anyway: the deployment's
-    model server or lent keys serve it at call time."""
+def _pick(kind: Kind, language: str | None, preferred: list[str], usable: set[str], label: str) -> str:
+    """The first provider in preference order that actually works: a key the
+    workspace has (or the platform lends), or a self-hosted model the model
+    server is serving right now. Never guesses: a provider nobody confirmed
+    gives a call that connects and then stays silent."""
     offered = list(list_providers(kind, language) if language else list_providers(kind))
     for provider in preferred + offered:
         if provider in offered and is_authenticated(provider, usable):
             return provider
-    if fixed:
-        for provider in preferred:
-            if provider in offered:
-                logger.warning("Fixed stack uses %s for %s without a confirmed connection", provider, label)
-                return provider
-    raise StackError(f"No {label} provider is available for this language yet.")
+    raise StackError(f"No {label} provider is set up for this language.")
 
 
-def build_models(language: str, usable: set[str], *, fixed: bool = False) -> dict[str, dict[str, Any]]:
+def build_models(language: str, usable: set[str]) -> dict[str, dict[str, Any]]:
     """Speech, AI and voice configs for ``language`` from the providers in ``usable``
     (plus self-hosted ones the model server is running), in the preference
     order set by TRY_STT_PROVIDERS / TRY_TTS_PROVIDERS / TRY_LLM_PROVIDER."""
-    stt = _pick(Kind.STT, language, _prefs(settings.TRY_STT_PROVIDERS), usable, "speech recognition", fixed=fixed)
-    tts = _pick(Kind.TTS, language, _prefs(settings.TRY_TTS_PROVIDERS), usable, "voice", fixed=fixed)
+    stt = _pick(Kind.STT, language, _prefs(settings.TRY_STT_PROVIDERS), usable, "speech recognition")
+    tts = _pick(Kind.TTS, language, _prefs(settings.TRY_TTS_PROVIDERS), usable, "voice")
     llm_pref = _prefs(settings.TRY_LLM_PROVIDER)
-    llm = _pick(Kind.LLM, None, llm_pref, usable, "AI model", fixed=fixed)
+    llm = _pick(Kind.LLM, None, llm_pref, usable, "AI model")
     # Same model as the preview's own text (greeting, translations), never the
     # provider catalog's default, which a key may not have.
     custom = (settings.TRY_LLM_MODEL or "").strip() if llm_pref and llm == llm_pref[0] else ""

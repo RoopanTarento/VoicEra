@@ -14,6 +14,12 @@ export interface TryLanguage {
   code: string;
   name: string;
   native: string;
+  /** A test call works in this language on this server right now. */
+  call_ready?: boolean;
+}
+
+export function canCall(language: TryLanguage | undefined): boolean {
+  return Boolean(language) && language?.call_ready !== false;
 }
 
 export interface TryCatalogue {

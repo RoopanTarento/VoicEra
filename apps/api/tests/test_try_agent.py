@@ -126,6 +126,12 @@ def test_prepare_creates_a_hidden_short_lived_agent_on_the_fixed_stack(client, s
     assert org["status"] == "active" and not secure_db["Memberships"].find_one({"org_id": try_agent.PREVIEW_ORG_ID})
 
 
+def test_visitors_with_the_same_picks_get_separate_agents(client, secure_db, stack):
+    ids = [client.post("/api/v1/try/prepare", json=KN, headers=_ip(9)).json()["agent_id"] for _ in range(2)]
+    names = {secure_db["Agents"].find_one({"agent_id": i})["name"] for i in ids}
+    assert len(names) == 2  # agent names are unique per workspace
+
+
 def test_call_needs_the_preview_token(client, stack):
     prep = client.post("/api/v1/try/prepare", json=KN, headers=_ip(2)).json()
     assert client.post("/api/v1/try/call", json={"agent_id": prep["agent_id"], "preview_token": "wrong"}).status_code == 404
@@ -204,23 +210,41 @@ def test_model_config_matches_the_wizard():
     assert cfg["provider"] == "openai" and cfg["model"] and cfg["voice"] == "alloy" and "language" in cfg
 
 
-def test_fixed_stack_uses_preferred_providers_even_when_not_confirmed(monkeypatch):
-    """The preview's fixed stack doesn't fail just because no provider reports as connected."""
+def test_stack_never_guesses_an_unconfirmed_provider(monkeypatch):
+    """A provider nobody confirmed gives a call that connects and stays silent, so it's refused."""
     monkeypatch.setattr(settings, "TRY_STT_PROVIDERS", "openai")
     monkeypatch.setattr(settings, "TRY_TTS_PROVIDERS", "openai")
     monkeypatch.setattr(settings, "TRY_LLM_PROVIDER", "openai")
     monkeypatch.setattr(settings, "TRY_LLM_MODEL", "")
     with pytest.raises(try_stack.StackError):
         try_stack.build_models("en", set())
-    models = try_stack.build_models("en", set(), fixed=True)
+    models = try_stack.build_models("en", {"openai"})
     assert {m["provider"] for m in models.values()} == {"openai"}
     # The call uses the preview's model, not the provider catalog's default.
     assert models["llm_config"]["model"] == try_stack.PREVIEW_LLM_MODELS["openai"]
 
 
+def test_an_openai_key_alone_covers_english_and_hindi_calls(monkeypatch):
+    """OpenAI has no Kannada voice: Kannada needs another provider."""
+    monkeypatch.setattr(settings, "TRY_LLM_MODEL", "")
+    assert try_stack.build_models("hi", {"openai"})["tts_config"]["provider"] == "openai"
+    with pytest.raises(try_stack.StackError):
+        try_stack.build_models("kn", {"openai"})
+    assert try_stack.build_models("kn", {"openai", "sarvam"})["tts_config"]["provider"] == "sarvam"
+
+
+def test_catalogue_marks_which_languages_can_be_called(client, monkeypatch):
+    monkeypatch.setattr(try_agent.auth_service, "available_providers", lambda org_id: ["openai"])
+    langs = {lang["code"]: lang["call_ready"] for lang in client.get("/api/v1/try/catalogue").json()["languages"]}
+    assert langs["en"] and langs["hi"] and not langs["kn"]
+
+
 def test_connected_providers_come_first(monkeypatch):
     monkeypatch.setattr(settings, "TRY_LLM_PROVIDER", "openai")
-    models = try_stack.build_models("en", {"groq"}, fixed=True)
+    monkeypatch.setattr(settings, "TRY_LLM_MODEL", "")
+    models = try_stack.build_models("en", {"groq", "openai"})
+    assert models["llm_config"]["provider"] == "openai"
+    models = try_stack.build_models("en", {"groq", "sarvam"})
     assert models["llm_config"]["provider"] == "groq"
     assert models["llm_config"]["model"] != try_stack.PREVIEW_LLM_MODELS["openai"]
 

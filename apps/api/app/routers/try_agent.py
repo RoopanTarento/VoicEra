@@ -66,7 +66,10 @@ def _raise(exc: try_agent.TryError) -> None:
 @router.get("/catalogue")
 async def catalogue() -> dict[str, Any]:
     _enabled()
-    return try_agent.catalogue()
+    data = try_agent.catalogue()
+    ready = set(try_agent.call_languages())
+    data["languages"] = [{**lang, "call_ready": lang["code"] in ready} for lang in data["languages"]]
+    return data
 
 
 @router.post("/agent")

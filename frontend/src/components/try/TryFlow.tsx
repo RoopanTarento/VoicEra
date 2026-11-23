@@ -13,6 +13,7 @@ import { DepartmentQuestion, LanguageQuestion, SchemeQuestion } from "@/componen
 import { TryHeader, type TryStep } from "@/components/try/TryHeader";
 import { VoicePreloader } from "@/components/try/VoiceWave";
 import {
+  canCall,
   getTryCatalogue,
   prepareTryCall,
   registerTryCall,
@@ -85,7 +86,7 @@ export function TryFlow() {
       const m = matchDescription(description, catalogue);
       setDepartments(m.departments);
       setSchemeIds(m.schemeIds);
-      if (m.language) setLanguage(m.language);
+      if (m.language && canCall(catalogue.languages.find((l) => l.code === m.language))) setLanguage(m.language);
     }
     setStage("department");
   }

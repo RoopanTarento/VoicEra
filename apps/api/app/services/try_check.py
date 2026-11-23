@@ -18,12 +18,9 @@ import urllib.request
 from app.config import settings
 from app.database import connect_to_mongo, get_database
 from app.services import auth_service, try_agent, try_stack
-from apps.providers.availability import is_authenticated
-from apps.providers.base import Kind
-from apps.providers.schema import list_providers
 
 OK, NO, WARN = "  [ok]  ", "  [!!]  ", "  [..]  "
-CALL_LANGUAGES = ("en", "hi", "kn", "ta", "te", "mr")
+CALL_LANGUAGES = [code for code, _name, _native in try_agent.LANGUAGES]
 
 
 def _line(mark: str, text: str) -> None:
@@ -87,17 +84,13 @@ def _call_stacks(lent: set[str]) -> None:
     usable = set(auth_service.available_providers(try_agent.PREVIEW_ORG_ID)) | lent
     for lang in CALL_LANGUAGES:
         try:
-            models = try_stack.build_models(lang, usable, fixed=True)
+            models = try_stack.build_models(lang, usable)
         except try_stack.StackError as exc:
-            _line(NO, f"{lang}: {exc}")
+            _line(NO, f"{lang}: {exc} Visitors can't pick {lang}. Lend a key that covers it (Sarvam or Google cover every"
+                      " Indian language; OpenAI only English and Hindi voices) or run the speech model server.")
             continue
-        parts, all_ok = [], True
-        for key, kind in (("stt_config", Kind.STT), ("llm_config", Kind.LLM), ("tts_config", Kind.TTS)):
-            provider = models[key]["provider"]
-            ok = is_authenticated(provider, usable) and provider in list_providers(kind, None if kind == Kind.LLM else lang)
-            all_ok &= ok
-            parts.append(f"{provider}{'' if ok else ' (not confirmed)'}")
-        _line(OK if all_ok else WARN, f"{lang}: " + " → ".join(parts))
+        parts = [models[key]["provider"] for key in ("stt_config", "llm_config", "tts_config")]
+        _line(OK, f"{lang}: " + " → ".join(parts))
 
 
 def _runtime() -> None:

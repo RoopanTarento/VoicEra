@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { ArrowLeft, ArrowRight, Check } from "lucide-react";
 import { Button } from "@/components/ui/Button";
-import type { TryCatalogue } from "@/lib/api/try-agent";
+import { canCall, type TryCatalogue } from "@/lib/api/try-agent";
 
 const FIRST_LANGUAGES = 6;
 
@@ -202,6 +202,8 @@ export function LanguageQuestion({
     () => catalogue.languages.findIndex((l) => l.code === selected) >= FIRST_LANGUAGES,
   );
   const shown = showAll ? catalogue.languages : catalogue.languages.slice(0, FIRST_LANGUAGES);
+  const selectedReady = canCall(catalogue.languages.find((l) => l.code === selected));
+  const noneReady = !catalogue.languages.some(canCall);
 
   return (
     <QuestionFrame
@@ -210,7 +212,7 @@ export function LanguageQuestion({
       note="You'll talk to it in this language on the test call."
       onBack={onBack}
       action={
-        <Button disabled={!selected} onClick={onNext}>
+        <Button disabled={!selectedReady} onClick={onNext}>
           Create my agent
           <ArrowRight className="size-4" strokeWidth={2} />
         </Button>
@@ -218,25 +220,32 @@ export function LanguageQuestion({
     >
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         {shown.map((l) => {
-          const on = selected === l.code;
+          const ready = canCall(l);
+          const on = ready && selected === l.code;
           return (
             <button
               key={l.code}
               type="button"
               lang={l.code}
               aria-pressed={on}
+              disabled={!ready}
               onClick={() => onChange(l.code)}
-              className={choiceClass(on)}
+              className={`${choiceClass(on)} disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-v-line`}
             >
               <span className="flex items-center gap-1.5 text-[19px] font-semibold leading-snug">
                 {l.native}
                 {on ? <Check className="size-4" strokeWidth={2.6} /> : null}
               </span>
-              <span className="text-[14px] text-v-muted-2">{l.name}</span>
+              <span className="text-[14px] text-v-muted-2">{ready ? l.name : `${l.name} · not available yet`}</span>
             </button>
           );
         })}
       </div>
+      {noneReady ? (
+        <p role="status" className="mt-6 text-[14px] text-v-danger">
+          Test calls aren&apos;t available right now. Please check back soon.
+        </p>
+      ) : null}
       {!showAll && catalogue.languages.length > FIRST_LANGUAGES ? (
         <button type="button" onClick={() => setShowAll(true)} className="mt-6 text-[14px] font-semibold text-v-accent hover:text-v-accent-deep">
           Show all languages

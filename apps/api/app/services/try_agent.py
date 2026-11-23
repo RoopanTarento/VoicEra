@@ -378,9 +378,27 @@ def _sweep_expired() -> None:
 
 def stack_for(language: str, org_id: str = PREVIEW_ORG_ID) -> dict[str, dict[str, Any]]:
     try:
-        return try_stack.build_models(language, set(auth_service.available_providers(org_id)), fixed=True)
+        return try_stack.build_models(language, set(auth_service.available_providers(org_id)))
     except try_stack.StackError as exc:
-        raise TryError(f"Test calls in {language_name(language)} aren't available yet. {exc}", status_code=503) from exc
+        # The fix is the operator's (see `python -m app.services.try_check`), not the visitor's.
+        logger.warning("Try-agent has no call stack for %s: %s", language, exc)
+        raise TryError(
+            f"Test calls in {language_name(language)} aren't available yet. Pick another language.", status_code=503
+        ) from exc
+
+
+def call_languages() -> list[str]:
+    """Languages a preview test call works in right now."""
+    _ensure_preview_org()
+    usable = set(auth_service.available_providers(PREVIEW_ORG_ID))
+    ready = []
+    for code, _name, _native in LANGUAGES:
+        try:
+            try_stack.build_models(code, usable)
+        except try_stack.StackError:
+            continue
+        ready.append(code)
+    return ready
 
 
 def _agent_config(agent: dict[str, Any], language: str, greeting: str, models: dict[str, Any], *, preview: bool) -> dict[str, Any]:
@@ -430,7 +448,12 @@ async def prepare_call(scheme_ids: list[str], language: str, greeting: str | Non
     check_and_count(ip, "call")
     _sweep_expired()
     created = await _create(
-        PREVIEW_ORG_ID, PREVIEW_CREATOR, agent["name"][:80], _agent_config(agent, language, opening, models, preview=True)
+        # Every visitor's agent lives in the one preview workspace, where names
+        # must be unique, so each gets a short random suffix.
+        PREVIEW_ORG_ID,
+        PREVIEW_CREATOR,
+        f"{agent['name'][:70]} · {secrets.token_hex(3)}",
+        _agent_config(agent, language, opening, models, preview=True),
     )
     token = secrets.token_urlsafe(24)
     expires = _now() + timedelta(minutes=settings.TRY_AGENT_TTL_MINUTES)
