@@ -248,6 +248,34 @@ class Settings(BaseSettings):
         ),
     )
 
+    # Public "try an agent" preview (no sign-up). See app/services/try_agent.py.
+    TRY_ENABLED: bool = Field(default=True, description="Serve the public /try preview endpoints")
+    TRY_LLM_PROVIDER: str = Field(default="openai", description="openai, groq or openrouter")
+    TRY_LLM_MODEL: str = Field(default="", description="Blank = gpt-4.1-mini on OpenAI")
+    TRY_LLM_API_KEY: str = Field(
+        default="",
+        description=(
+            "Platform key for the preview. Blank = KB_EMBEDDING_API_KEY for OpenAI, or "
+            "COPILOT_LLM_API_KEY when TRY_LLM_PROVIDER matches COPILOT_LLM_PROVIDER."
+        ),
+    )
+    TRY_KEY_ORG_ID: str = Field(
+        default="",
+        description=(
+            "Use this organisation's Integrations key for TRY_LLM_PROVIDER when "
+            "TRY_LLM_API_KEY is blank (e.g. the platform team's own workspace)."
+        ),
+    )
+    TRY_TURNS_PER_IP_HOUR: int = Field(default=30, description="Preview replies per visitor IP per hour")
+    TRY_TURNS_PER_DAY: int = Field(default=1500, description="Preview replies across all visitors per day")
+    TRY_TRUSTED_PROXY_HOPS: int = Field(
+        default=1,
+        description=(
+            "Proxies in front of the API that append X-Forwarded-For (the Next.js server is one; "
+            "add one for nginx or a load balancer). 0 = use the socket address."
+        ),
+    )
+
     @field_validator("DEBUG", "SECURE_ENFORCE_VAULT_CAMPAIGNS", "TELEPHONY_MOCK_ENABLED", mode="before")
     @classmethod
     def coerce_debug(cls, value: Any) -> bool:

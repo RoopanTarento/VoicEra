@@ -164,6 +164,10 @@ export default function SignInPage() {
             <Link href="/signup" className="font-medium text-v-accent hover:text-v-accent-deep">
               Sign up
             </Link>
+            {" · "}
+            <Link href="/try" className="font-medium text-v-accent hover:text-v-accent-deep">
+              Try an agent first
+            </Link>
           </p>
         </motion.div>
       </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AlertTriangle, ArrowLeft, ArrowRight, BookOpen, CheckCircle2, Compass, Sparkles } from "lucide-react";
@@ -17,6 +17,7 @@ import { DepartmentSchemePicker } from "@/components/wizard/DepartmentSchemePick
 import { useUseCaseCatalogue } from "@/hooks/useUseCaseCatalogue";
 import { formToAgentCreatePayload } from "@/lib/agent-mapper";
 import { createAgent } from "@/lib/api-client";
+import { clearTryDraft, readTryDraft } from "@/lib/api/try-agent";
 import { fetchKnowledgePack, getUseCasePreset, type Scheme } from "@/lib/api/use-cases";
 import type { AgentApiResponse } from "@/lib/api-types";
 import { useWizardCatalogs } from "@/lib/use-wizard-catalogs";
@@ -60,6 +61,9 @@ export function QuickAgentFlow({
   const [createError, setCreateError] = useState("");
   const [agent, setAgent] = useState<AgentApiResponse | null>(null);
   const [viewing, setViewing] = useState<{ name: string; blob?: Blob } | null>(null);
+  // Set when this agent is the one the visitor tried on /try before signing up.
+  const [fromTry, setFromTry] = useState(false);
+  const draftRead = useRef(false);
 
   const stack = activeLanguageStack(form);
   const catalogs = useWizardCatalogs(form.langs, stack.sttProvider, stack.ttsProvider, stack.llmProvider);
@@ -71,14 +75,30 @@ export function QuickAgentFlow({
   const discovery = catalogue?.intents.find((i) => i.id === "discovery");
   const otherPaths = (catalogue?.intents ?? []).filter((i) => i.id !== "discovery").map((i) => i.name);
 
-  async function writeAgent() {
-    const key = schemeIds.join(",");
+  // Pick up the agent tried on /try: same schemes and language, written the
+  // same way, so all that's left is to check it and create it.
+  useEffect(() => {
+    if (draftRead.current) return;
+    draftRead.current = true;
+    const draft = readTryDraft();
+    if (!draft) return;
+    clearTryDraft();
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reading the saved draft once on mount
+    setFromTry(true);
+    setSchemeIds(draft.schemeIds);
+    setForm((f) => ({ ...f, langs: [draft.language] }));
+    void writeAgent(draft.schemeIds);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once, on mount
+  }, []);
+
+  async function writeAgent(ids: string[] = schemeIds) {
+    const key = ids.join(",");
     setStep(1);
     if (key === writtenFor) return;
     setWriting(true);
     setWriteError("");
     try {
-      const preset = await getUseCasePreset({ type: "scheme", intent: "discovery", scheme_ids: schemeIds, survey_id: null });
+      const preset = await getUseCasePreset({ type: "scheme", intent: "discovery", scheme_ids: ids, survey_id: null });
       setForm((f) => ({
         ...f,
         name: preset.name.slice(0, AGENT_NAME_MAX_LENGTH),
@@ -201,6 +221,12 @@ export function QuickAgentFlow({
         {/* 2. The agent, written for them */}
         {step === 1 ? (
           <section className="flex flex-col gap-4 animate-v-rise">
+            {fromTry ? (
+              <p className="m-0 rounded-v-md border border-v-line bg-v-pale px-4 py-3 text-[13px] text-v-muted-2">
+                <span className="font-semibold text-v-fg">This is the agent you tried.</span> Check its name and greeting,
+                then pick its voice settings and create it in your workspace.
+              </p>
+            ) : null}
             {writing ? (
               <div className="flex min-h-[240px] flex-col items-center justify-center gap-3 rounded-v-md border border-v-line bg-white">
                 <Spinner light={false} />

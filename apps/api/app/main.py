@@ -32,6 +32,7 @@ from app.routers import (
     platform,
     rag,
     secure,
+    try_agent,
     use_cases,
     users,
 )
@@ -118,6 +119,7 @@ for _router in (
     platform.router,
     rbac_router.router,
     use_cases.router,
+    try_agent.router,
 ):
     app.include_router(_router, prefix=settings.API_V1_PREFIX, dependencies=_guard)
 

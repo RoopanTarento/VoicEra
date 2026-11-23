@@ -232,6 +232,10 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", f"{_P}/members/invitations"): "members:write",
     ("DELETE", f"{_P}/members/invitations/{{invite_id}}"): "members:write",
     ("GET", f"{_P}/members/invitations/lookup/{{token}}"): PUBLIC,
+    # public agent preview (rate-limited in app/services/try_agent.py)
+    ("GET", f"{_P}/try/catalogue"): PUBLIC,
+    ("POST", f"{_P}/try/agent"): PUBLIC,
+    ("POST", f"{_P}/try/chat"): PUBLIC,
     ("GET", f"{_P}/members/{{org_id}}"): "members:read",
     ("POST", f"{_P}/members/assign-admin"): "members:write",
     ("POST", f"{_P}/members/remove"): "members:write",
