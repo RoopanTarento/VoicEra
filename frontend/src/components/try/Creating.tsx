@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { AudioLines, Check } from "lucide-react";
+import { Check } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Spinner } from "@/components/ui/Spinner";
+import { VoiceWave } from "@/components/try/VoiceWave";
 import {
   buildTryAgent,
   prepareTryCall,
@@ -83,20 +84,40 @@ export function Creating({
 
   return (
     <section className="mx-auto flex w-full max-w-[560px] flex-col items-center px-4 pb-16 pt-14 text-center sm:px-6 animate-v-rise">
-      <span className="flex size-[88px] items-center justify-center rounded-full bg-v-pale text-v-fg">
-        <AudioLines className="size-9" strokeWidth={1.8} />
+      {/* Ripples and moving voice bars while it works; a check when it's done. */}
+      <span className="relative flex size-[96px] items-center justify-center">
+        {!error && done < steps.length ? (
+          <>
+            <span className="absolute inset-0 rounded-full bg-v-pale animate-v-pulse motion-reduce:animate-none" />
+            <span className="absolute inset-0 rounded-full bg-v-pale animate-v-pulse [animation-delay:0.8s] motion-reduce:animate-none" />
+          </>
+        ) : null}
+        <span className="relative flex size-[96px] items-center justify-center rounded-full bg-v-pale">
+          {done >= steps.length ? (
+            <span className="flex size-12 items-center justify-center rounded-full bg-v-accent text-white animate-v-pop">
+              <Check className="size-6" strokeWidth={2.6} />
+            </span>
+          ) : (
+            <VoiceWave bars={5} height={38} barWidth={5} gap={5} className="bg-v-fg" paused={Boolean(error)} />
+          )}
+        </span>
       </span>
       <h1 className="m-0 mt-6 text-[30px] font-semibold tracking-tight sm:text-[34px]">Creating your agent</h1>
       <p className="m-0 mt-1.5 text-[15px] font-light text-v-muted-2">About 20 seconds.</p>
 
-      <ol className="m-0 mt-8 flex w-full list-none flex-col gap-4 rounded-v-xl border border-v-line bg-white px-6 py-5 text-left">
+      <ol className="relative m-0 mt-8 flex w-full list-none flex-col gap-4 overflow-hidden rounded-v-xl border border-v-line bg-white px-6 py-5 text-left">
+        <span
+          aria-hidden="true"
+          className="absolute inset-x-0 bottom-0 h-[3px] origin-left bg-v-accent transition-transform duration-700 ease-out"
+          style={{ transform: `scaleX(${done / steps.length})` }}
+        />
         {steps.map((label, i) => {
           const state = i < done ? "done" : i === done && !error ? "active" : "waiting";
           return (
             <li key={label} className="flex items-center gap-3 text-[15px]">
               <span className="flex size-5 shrink-0 items-center justify-center">
                 {state === "done" ? (
-                  <Check className="size-5 text-v-fg" strokeWidth={2.4} />
+                  <Check className="size-5 text-v-fg animate-v-pop" strokeWidth={2.4} />
                 ) : state === "active" ? (
                   <Spinner light={false} />
                 ) : (
@@ -146,7 +167,7 @@ export function Creating({
         ).map(([label, value]) => (
           <div key={label} className="flex flex-col gap-0.5 rounded-v-md bg-v-soft px-4 py-3">
             <span className="text-[12.5px] text-v-muted-2">{label}</span>
-            <span className="truncate text-[14px] font-semibold text-v-fg">{value ?? "…"}</span>
+            <span className="break-words text-[14px] font-semibold leading-snug text-v-fg">{value ?? "…"}</span>
           </div>
         ))}
       </div>

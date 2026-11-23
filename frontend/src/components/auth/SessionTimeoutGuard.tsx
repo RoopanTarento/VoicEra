@@ -34,10 +34,10 @@ function expireAndRedirect() {
   clearActivityTracking();
   markSessionExpiredForLogin();
   broadcastSession({ type: "expired" });
-  if (typeof window !== "undefined" && window.location.pathname !== "/") {
+  if (typeof window !== "undefined" && window.location.pathname !== "/signin") {
     // Hard redirect: force a full client reset outside React routing.
     // eslint-disable-next-line @next/next/no-location-assign-relative-destination
-    window.location.href = "/";
+    window.location.href = "/signin";
   }
 }
 
@@ -115,9 +115,9 @@ export function SessionTimeoutGuard() {
         clearSession();
         clearActivityTracking();
         markSessionExpiredForLogin();
-        if (window.location.pathname !== "/") {
+        if (window.location.pathname !== "/signin") {
           // eslint-disable-next-line @next/next/no-location-assign-relative-destination
-          window.location.href = "/";
+          window.location.href = "/signin";
         }
       }
     };

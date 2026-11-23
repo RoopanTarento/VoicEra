@@ -73,7 +73,7 @@ _BASE_URLS: dict[str, str | None] = {
     "groq": "https://api.groq.com/openai/v1",
     "openrouter": "https://openrouter.ai/api/v1",
 }
-_DEFAULT_MODELS = {"openai": "gpt-4.1-mini", "groq": "openai/gpt-oss-120b", "openrouter": "openai/gpt-4.1-mini"}
+_DEFAULT_MODELS = try_stack.PREVIEW_LLM_MODELS
 
 _TRANSLATE_TO_PROMPT = (
     "Translate this opening line of a phone call into natural spoken {language}, in its "
@@ -354,7 +354,7 @@ def _sweep_expired() -> None:
 
 def stack_for(language: str, org_id: str = PREVIEW_ORG_ID) -> dict[str, dict[str, Any]]:
     try:
-        return try_stack.build_models(language, set(auth_service.available_providers(org_id)))
+        return try_stack.build_models(language, set(auth_service.available_providers(org_id)), fixed=True)
     except try_stack.StackError as exc:
         raise TryError(f"Test calls in {language_name(language)} aren't available yet. {exc}", status_code=503) from exc
 

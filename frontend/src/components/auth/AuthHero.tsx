@@ -119,9 +119,18 @@ export function AuthHero() {
       </div>
 
       <div className="relative flex flex-wrap items-center gap-5 text-xs font-light">
-        {["Repository", "Docs", "Privacy", "Terms"].map((l) => (
-          <a key={l} href="#" className="text-white/72 hover:text-white">
-            {l}
+        {[
+          { label: "Docs", href: "https://voicera.mintlify.app/docs/guides" },
+          { label: "Privacy", href: "/privacy" },
+          { label: "Terms", href: "/terms" },
+        ].map((l) => (
+          <a
+            key={l.label}
+            href={l.href}
+            {...(l.href.startsWith("http") ? { target: "_blank", rel: "noreferrer" } : {})}
+            className="text-white/72 hover:text-white"
+          >
+            {l.label}
           </a>
         ))}
       </div>

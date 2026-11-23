@@ -28,7 +28,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const stored = getSession();
     if (!stored) {
       setLoading(false);
-      router.replace("/");
+      router.replace("/signin");
       return;
     }
 
@@ -38,7 +38,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clearSession();
       markSessionExpiredForLogin();
       setLoading(false);
-      router.replace("/");
+      router.replace("/signin");
       return;
     }
 
@@ -64,7 +64,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       })
       .catch(() => {
         clearSession();
-        router.replace("/");
+        router.replace("/signin");
       })
       .finally(() => setLoading(false));
   }, [router]);
@@ -72,7 +72,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   function signOut() {
     clearSession();
     setSession(null);
-    router.replace("/");
+    router.replace("/signin");
   }
 
   if (loading) {

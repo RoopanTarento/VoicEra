@@ -44,7 +44,7 @@ def fake_llm(monkeypatch: pytest.MonkeyPatch):
 def stack(monkeypatch: pytest.MonkeyPatch):
     seen: list[set] = []
 
-    def build(language, usable):
+    def build(language, usable, **kw):
         seen.append(set(usable))
         return {k: dict(v, language=language) if k != "llm_config" else dict(v) for k, v in FAKE_MODELS.items()}
 
@@ -91,7 +91,7 @@ def test_english_agent_needs_no_model_call(client, fake_llm, stack):
 
 
 def test_agent_reports_when_no_voice_stack_is_available(client, fake_llm, monkeypatch):
-    def none(language, usable):
+    def none(language, usable, **kw):
         raise try_stack.StackError("No voice provider is available for this language yet.")
 
     monkeypatch.setattr(try_stack, "build_models", none)
@@ -202,3 +202,24 @@ def test_model_config_matches_the_wizard():
 
     cfg = try_stack.model_config(Kind.TTS, "openai", "kn")
     assert cfg["provider"] == "openai" and cfg["model"] and cfg["voice"] == "alloy" and "language" in cfg
+
+
+def test_fixed_stack_uses_preferred_providers_even_when_not_confirmed(monkeypatch):
+    """The preview's fixed stack doesn't fail just because no provider reports as connected."""
+    monkeypatch.setattr(settings, "TRY_STT_PROVIDERS", "openai")
+    monkeypatch.setattr(settings, "TRY_TTS_PROVIDERS", "openai")
+    monkeypatch.setattr(settings, "TRY_LLM_PROVIDER", "openai")
+    monkeypatch.setattr(settings, "TRY_LLM_MODEL", "")
+    with pytest.raises(try_stack.StackError):
+        try_stack.build_models("en", set())
+    models = try_stack.build_models("en", set(), fixed=True)
+    assert {m["provider"] for m in models.values()} == {"openai"}
+    # The call uses the preview's model, not the provider catalog's default.
+    assert models["llm_config"]["model"] == try_stack.PREVIEW_LLM_MODELS["openai"]
+
+
+def test_connected_providers_come_first(monkeypatch):
+    monkeypatch.setattr(settings, "TRY_LLM_PROVIDER", "openai")
+    models = try_stack.build_models("en", {"groq"}, fixed=True)
+    assert models["llm_config"]["provider"] == "groq"
+    assert models["llm_config"]["model"] != try_stack.PREVIEW_LLM_MODELS["openai"]

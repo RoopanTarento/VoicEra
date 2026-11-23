@@ -119,7 +119,7 @@ function SignInLink() {
   return (
     <p className="text-center text-xs text-v-muted">
       Already have an account?{" "}
-      <Link href="/" className="font-medium text-v-accent hover:text-v-accent-deep">
+      <Link href="/signin" className="font-medium text-v-accent hover:text-v-accent-deep">
         Sign in
       </Link>
     </p>
@@ -600,7 +600,7 @@ function CreateOrganisationSignup() {
               <p className="m-0 rounded-v-sm border border-v-line bg-v-soft/50 px-3.5 py-2.5 text-[12.5px] leading-relaxed text-v-muted">
                 You already have a Voicera account with this email. The password you entered
                 in step 1 must match that account to create another organisation.{" "}
-                <Link href="/" className="font-medium text-v-accent hover:text-v-accent-deep">
+                <Link href="/signin" className="font-medium text-v-accent hover:text-v-accent-deep">
                   Sign in
                 </Link>{" "}
                 if you forgot it.

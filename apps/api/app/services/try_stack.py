@@ -21,6 +21,9 @@ logger = logging.getLogger(__name__)
 
 _NON_FIELD_KEYS = {"model", "language"}
 
+# Default AI model for the preview on each provider (TRY_LLM_MODEL overrides).
+PREVIEW_LLM_MODELS = {"openai": "gpt-4.1-mini", "groq": "openai/gpt-oss-120b", "openrouter": "openai/gpt-4.1-mini"}
+
 
 class StackError(Exception):
     """No usable provider for one part of the stack."""
@@ -88,23 +91,34 @@ def model_config(kind: Kind, provider: str, language: str | None, model: str | N
     return out
 
 
-def _pick(kind: Kind, language: str | None, preferred: list[str], usable: set[str], label: str) -> str:
+def _pick(kind: Kind, language: str | None, preferred: list[str], usable: set[str], label: str, *, fixed: bool) -> str:
+    """The first connected provider in preference order. With ``fixed`` (the
+    preview's fixed stack) and none reported as connected, the first preferred
+    provider that supports the language is used anyway: the deployment's
+    model server or lent keys serve it at call time."""
     offered = list(list_providers(kind, language) if language else list_providers(kind))
     for provider in preferred + offered:
         if provider in offered and is_authenticated(provider, usable):
             return provider
+    if fixed:
+        for provider in preferred:
+            if provider in offered:
+                logger.warning("Fixed stack uses %s for %s without a confirmed connection", provider, label)
+                return provider
     raise StackError(f"No {label} provider is available for this language yet.")
 
 
-def build_models(language: str, usable: set[str]) -> dict[str, dict[str, Any]]:
+def build_models(language: str, usable: set[str], *, fixed: bool = False) -> dict[str, dict[str, Any]]:
     """Speech, AI and voice configs for ``language`` from the providers in ``usable``
     (plus self-hosted ones the model server is running), in the preference
     order set by TRY_STT_PROVIDERS / TRY_TTS_PROVIDERS / TRY_LLM_PROVIDER."""
-    stt = _pick(Kind.STT, language, _prefs(settings.TRY_STT_PROVIDERS), usable, "speech recognition")
-    tts = _pick(Kind.TTS, language, _prefs(settings.TRY_TTS_PROVIDERS), usable, "voice")
+    stt = _pick(Kind.STT, language, _prefs(settings.TRY_STT_PROVIDERS), usable, "speech recognition", fixed=fixed)
+    tts = _pick(Kind.TTS, language, _prefs(settings.TRY_TTS_PROVIDERS), usable, "voice", fixed=fixed)
     llm_pref = _prefs(settings.TRY_LLM_PROVIDER)
-    llm = _pick(Kind.LLM, None, llm_pref, usable, "AI model")
-    llm_model = (settings.TRY_LLM_MODEL or "").strip() if llm_pref and llm == llm_pref[0] else ""
+    llm = _pick(Kind.LLM, None, llm_pref, usable, "AI model", fixed=fixed)
+    # Same model as the preview's own text (greeting, translations), never the
+    # provider catalog's default, which a key may not have.
+    llm_model = ((settings.TRY_LLM_MODEL or "").strip() or PREVIEW_LLM_MODELS.get(llm, "")) if llm_pref and llm == llm_pref[0] else ""
     return {
         "stt_config": {"kind": "stt", **model_config(Kind.STT, stt, language)},
         "tts_config": {"kind": "tts", **model_config(Kind.TTS, tts, language)},

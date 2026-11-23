@@ -53,11 +53,11 @@ export async function apiFetch<T>(
 
   if (res.status === 401 && auth) {
     clearSession();
-    if (typeof window !== "undefined" && window.location.pathname !== "/") {
+    if (typeof window !== "undefined" && window.location.pathname !== "/signin") {
       // Hard redirect (not router.push): this runs outside React/Next.js routing context
       // and must force a full reset of all client state, not just navigate.
       // eslint-disable-next-line @next/next/no-location-assign-relative-destination
-      window.location.href = "/";
+      window.location.href = "/signin";
     }
   }
 
@@ -81,9 +81,9 @@ export async function apiFetchBlob(path: string, options: RequestInit = {}): Pro
 
   if (res.status === 401) {
     clearSession();
-    if (typeof window !== "undefined" && window.location.pathname !== "/") {
+    if (typeof window !== "undefined" && window.location.pathname !== "/signin") {
       // eslint-disable-next-line @next/next/no-location-assign-relative-destination
-      window.location.href = "/";
+      window.location.href = "/signin";
     }
   }
 

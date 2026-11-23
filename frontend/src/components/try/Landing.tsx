@@ -6,8 +6,6 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 
 const DOCS_URL = "https://voicera.mintlify.app/docs/guides";
-const PRIVACY_URL = process.env.NEXT_PUBLIC_PRIVACY_URL ?? "";
-const TERMS_URL = process.env.NEXT_PUBLIC_TERMS_URL ?? "";
 
 const COMING_SOON = [
   { title: "Enrolment and follow-ups", note: "e.g. enrolment help, health follow-ups" },
@@ -28,10 +26,10 @@ export function Landing({
 }) {
   const [focused, setFocused] = useState(false);
   const footer = [
-    { label: "Docs", href: DOCS_URL },
-    { label: "Privacy", href: PRIVACY_URL },
-    { label: "Terms", href: TERMS_URL },
-  ].filter((l) => l.href);
+    { label: "Docs", href: DOCS_URL, external: true },
+    { label: "Privacy", href: "/privacy", external: false },
+    { label: "Terms", href: "/terms", external: false },
+  ];
 
   return (
     <div className="flex flex-1 flex-col">
@@ -120,7 +118,12 @@ export function Landing({
 
       <footer className="flex justify-center gap-6 pb-8 text-[13px] text-v-muted">
         {footer.map((l) => (
-          <a key={l.label} href={l.href} target="_blank" rel="noreferrer" className="underline-offset-4 hover:text-v-fg hover:underline">
+          <a
+            key={l.label}
+            href={l.href}
+            {...(l.external ? { target: "_blank", rel: "noreferrer" } : {})}
+            className="underline-offset-4 hover:text-v-fg hover:underline"
+          >
             {l.label}
           </a>
         ))}

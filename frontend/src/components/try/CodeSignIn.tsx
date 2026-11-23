@@ -64,7 +64,8 @@ export function CodeSignIn({ agentLabel }: { agentLabel: string }) {
       try {
         const saved = await saveTriedAgent(draft);
         clearTryDraft();
-        router.push(`/agents/${saved.agent_id}`);
+        // Their agents list, where the first-login tour runs, with a note that it's saved.
+        router.push(`/dashboard?saved=${encodeURIComponent(saved.name)}`);
       } catch {
         // The workspace can't build it on its own providers yet: finish in the
         // quick setup, which keeps the schemes and language from the draft.
