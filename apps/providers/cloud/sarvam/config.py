@@ -84,7 +84,9 @@ class SarvamSTTConfig(SarvamAuth, SarvamSTTSettings, BaseSTTConfig):
 
     provider: Literal["sarvam"] = "sarvam"
     model: str = Field(
-        default=model_ids(STT_CAPABILITIES)[0],
+        # saaras:v3: the runtime's Pipecat (1.8.1) rejects saarika:v2.5, so a
+        # default of saarika made every Sarvam-listening call drop at start.
+        default="saaras:v3",
         description="Sarvam STT model.",
         json_schema_extra={
             "examples": list(model_ids(STT_CAPABILITIES)),

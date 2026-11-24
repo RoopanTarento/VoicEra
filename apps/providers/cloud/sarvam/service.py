@@ -7,13 +7,22 @@ from .config import SarvamLLMConfig, SarvamSTTConfig, SarvamTTSConfig
 from .catalog import DEFAULT_LLM_BASE_URL
 
 
+# Speech models Pipecat no longer accepts, and what replaces them. Agents saved
+# with saarika:v2.5 (the old default) keep working instead of failing at call start.
+RETIRED_STT_MODELS = {"saarika:v2.5": "saaras:v3", "saarika:v2": "saaras:v3", "saarika-v2": "saaras:v3"}
+
+
+def stt_model(model: str) -> str:
+    return RETIRED_STT_MODELS.get((model or "").strip(), model)
+
+
 @register_stt
 def create_stt(cfg: SarvamSTTConfig):
     from pipecat.services.sarvam.stt import SarvamSTTService, SarvamSTTSettings
 
     return SarvamSTTService(
         api_key=cfg.api_key,
-        settings=SarvamSTTSettings(model=cfg.model, language=cfg.language),
+        settings=SarvamSTTSettings(model=stt_model(cfg.model), language=cfg.language),
     )
 
 
