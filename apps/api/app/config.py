@@ -280,11 +280,11 @@ class Settings(BaseSettings):
         ),
     )
     TRY_TURNS_PER_IP_HOUR: int = Field(
-        default=60, description="Preview text requests (greeting, transcript lines, summary) per visitor IP per hour"
+        default=300, description="Preview text requests (greeting, transcript lines, summary) per visitor IP per hour"
     )
-    TRY_TURNS_PER_DAY: int = Field(default=3000, description="Preview text requests across all visitors per day")
-    TRY_CALLS_PER_IP_HOUR: int = Field(default=6, description="Preview test calls per visitor IP per hour")
-    TRY_CALLS_PER_DAY: int = Field(default=300, description="Preview test calls across all visitors per day")
+    TRY_TURNS_PER_DAY: int = Field(default=10000, description="Preview text requests across all visitors per day")
+    TRY_CALLS_PER_IP_HOUR: int = Field(default=30, description="Preview test calls per visitor IP per hour")
+    TRY_CALLS_PER_DAY: int = Field(default=1000, description="Preview test calls across all visitors per day")
     TRY_CALL_MAX_SECONDS: int = Field(default=180, description="The browser ends a preview test call after this long")
     TRY_AGENT_TTL_MINUTES: int = Field(default=30, description="Preview agents are deleted after this long")
     TRY_STT_PROVIDERS: str = Field(
