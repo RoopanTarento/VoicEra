@@ -262,6 +262,13 @@ def test_calls_are_capped_per_ip(client, fake_llm, stack, monkeypatch):
     assert spoofed.status_code == 429
 
 
+def test_no_limits_by_default(client, fake_llm, stack, monkeypatch):
+    for name in ("TRY_CALLS_PER_IP_HOUR", "TRY_CALLS_PER_DAY"):
+        monkeypatch.setattr(settings, name, 0)
+    codes = {client.post("/api/v1/try/prepare", json=EN, headers=_ip(18)).status_code for _ in range(8)}
+    assert codes == {200}
+
+
 def test_turns_are_capped_per_day(client, fake_llm, stack, monkeypatch):
     monkeypatch.setattr(settings, "TRY_TURNS_PER_DAY", 1)
     assert client.post("/api/v1/try/agent", json=KN, headers=_ip(16)).status_code == 200

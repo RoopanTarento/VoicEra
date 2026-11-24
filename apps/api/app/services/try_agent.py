@@ -173,11 +173,13 @@ _BUCKETS = {
 def check_and_count(ip: str | None, bucket: str = "turn") -> None:
     """Refuse when this visitor or everyone together is over the bucket's budget; else count one."""
     per_ip, per_day = (getattr(settings, name) for name in _BUCKETS[bucket])
+    if per_ip <= 0 and per_day <= 0:
+        return  # 0 = no limit (the default); nothing to count
     col = _collection()
     now = _now()
-    if col.count_documents({"key": f"all:{bucket}", "at": {"$gte": now - timedelta(days=1)}}) >= per_day:
+    if per_day > 0 and col.count_documents({"key": f"all:{bucket}", "at": {"$gte": now - timedelta(days=1)}}) >= per_day:
         raise TryLimited("The free preview is busy today. Sign in to keep building your agent.")
-    if ip:
+    if ip and per_ip > 0:
         mine = col.count_documents({"key": f"ip:{bucket}:{ip}", "at": {"$gte": now - timedelta(hours=1)}})
         if mine >= per_ip:
             raise TryLimited("That's the end of the free preview for now. Sign in to keep testing your agent.")
