@@ -234,11 +234,18 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", f"{_P}/members/invitations/lookup/{{token}}"): PUBLIC,
     # public agent preview (rate-limited in app/services/try_agent.py)
     ("GET", f"{_P}/try/catalogue"): PUBLIC,
+    ("GET", f"{_P}/try/sources"): PUBLIC,
+    ("POST", f"{_P}/try/route"): PUBLIC,
+    ("POST", f"{_P}/try/sources/upload"): PUBLIC,
+    ("POST", f"{_P}/try/sources/link"): PUBLIC,
     ("POST", f"{_P}/try/agent"): PUBLIC,
     ("POST", f"{_P}/try/prepare"): PUBLIC,
     ("POST", f"{_P}/try/call"): PUBLIC,
     ("POST", f"{_P}/try/translate"): PUBLIC,
+    ("POST", f"{_P}/try/progress"): PUBLIC,
     ("POST", f"{_P}/try/summary"): PUBLIC,
+    # The voice runtime's demo tools: X-API-Key checked in the handler.
+    ("POST", f"{_P}/try/runtime/tool"): SERVICE,
     ("POST", f"{_P}/try/save"): "agents:write",
     ("POST", f"{_P}/users/login-code"): PUBLIC,
     ("POST", f"{_P}/users/login-code/verify"): PUBLIC,

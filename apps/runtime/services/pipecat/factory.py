@@ -26,6 +26,7 @@ from pipecat.turns.user_start import (
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from starlette.websockets import WebSocket
 
+from apps.runtime.services.demo.tools import configure_demo_tools
 from apps.runtime.services.knowledge.setup import configure_knowledge_base
 from apps.runtime.services.pipecat.call_ending import configure_call_ending
 from apps.runtime.services.language_switch.tools import configure_language_switching
@@ -67,6 +68,7 @@ def build_pipeline_components(
     behaviour: dict[str, Any],
     extra_tools: list[Any] | None = None,
     aggregator_hooks: Callable[[LLMContextAggregatorPair], None] | None = None,
+    call_id: str | None = None,
 ) -> PipelineComponents:
     speaking_vad = vad_params_from_behaviour(behaviour, key="vad")
     idle_vad = vad_params_from_behaviour(behaviour, key="vad_idle")
@@ -163,6 +165,8 @@ def build_pipeline_components(
         llm_switcher=llm,
         agent_id=agent.get("agent_id"),
     )
+    # Agents built by the no-login demo builder: its six flow and knowledge tools.
+    configure_demo_tools(agent, context=context, org_id=org_id, call_id=call_id)
 
     pipeline_processors = [
         transport.input(),

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from apps.runtime.services.demo.tools import keeps_no_recordings
 from apps.runtime.services.pipecat.config import PipelineConfig
 from apps.runtime.services.pipecat.events.logging import register_turn_logging_handlers
 from apps.runtime.services.pipecat.events.recording import register_recording_handlers
@@ -31,7 +32,9 @@ def register_all_handlers(
     call_id: str | None,
     agent: dict | None = None,
 ) -> None:
-    if call_id:
+    # No-login demo calls keep no audio and no transcript.
+    store = not keeps_no_recordings(agent)
+    if call_id and store:
         components.transcript_writer = register_transcript_file_logging(
             components.user_aggregator,
             components.assistant_aggregator,
@@ -55,11 +58,12 @@ def register_all_handlers(
         components.assistant_aggregator,
         session_label=session_label,
     )
-    register_recording_handlers(
-        components.audiobuffer,
-        org_id=org_id,
-        call_id=call_id,
-    )
+    if store:
+        register_recording_handlers(
+            components.audiobuffer,
+            org_id=org_id,
+            call_id=call_id,
+        )
     llm_config = ((agent or {}).get("config") or {}).get("models") or {}
     llm_config = llm_config.get("llm_config")
     llm_config = llm_config if isinstance(llm_config, dict) else {}

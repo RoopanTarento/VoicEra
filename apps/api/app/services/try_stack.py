@@ -19,7 +19,7 @@ from apps.providers.schema import list_providers, provider_settings
 _NON_FIELD_KEYS = {"model", "language"}
 
 # Default AI model for the preview on each provider (TRY_LLM_MODEL overrides).
-PREVIEW_LLM_MODELS = {"openai": "gpt-4.1-mini", "groq": "openai/gpt-oss-120b", "openrouter": "openai/gpt-4.1-mini"}
+PREVIEW_LLM_MODELS = {"openai": "gpt-4.1", "groq": "openai/gpt-oss-120b", "openrouter": "openai/gpt-4.1"}
 
 
 class StackError(Exception):

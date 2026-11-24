@@ -9,6 +9,7 @@ import {
   buildTryAgent,
   prepareTryCall,
   registerTryCall,
+  type DemoAnswers,
   type TryAgent,
   type TryPrepared,
   type TryStack,
@@ -20,21 +21,23 @@ export interface CreatedAgent {
   callId: string;
 }
 
-/** Shown while the agent is written and its test call is set up; moves on by itself. */
+/** Agent assembly (the "Creating your agent" checklist); moves on by itself when done. */
 export function Creating({
-  schemeIds,
-  language,
+  answers,
   languageName,
+  expectedCards,
   onDone,
   onBack,
 }: {
-  schemeIds: string[];
-  language: string;
+  answers: DemoAnswers;
   languageName: string;
+  /** Shown before the server answers; replaced by the real count. */
+  expectedCards: number | null;
   onDone: (created: CreatedAgent) => void;
   onBack: () => void;
 }) {
   const [done, setDone] = useState(0);
+  const [agent, setAgent] = useState<TryAgent | null>(null);
   const [stack, setStack] = useState<TryStack | null>(null);
   const [error, setError] = useState("");
   const [attempt, setAttempt] = useState(0);
@@ -42,29 +45,33 @@ export function Creating({
   useEffect(() => {
     finish.current = onDone;
   }, [onDone]);
+  const key = JSON.stringify(answers);
 
+  const cards = agent?.cards ?? expectedCards;
+  const voice = stack?.tts ? ` (${stack.tts})` : "";
   const steps = [
-    "Writing the greeting and script",
-    "Checking scheme facts against official sources",
-    `Setting up the ${languageName} voice`,
+    "Loading the greeting and question flows",
+    cards === null ? "Loading the knowledge cards" : `Loading ${cards} checked knowledge ${cards === 1 ? "card" : "cards"}`,
+    `Setting up the ${languageName} voice${voice}`,
     "Getting the test call ready",
   ];
 
   useEffect(() => {
     let cancelled = false;
     const step = (n: number) => !cancelled && setDone(n);
+    const body = JSON.parse(key) as DemoAnswers;
     (async () => {
       try {
-        const agent = await buildTryAgent(schemeIds, language);
+        const built = await buildTryAgent(body);
         if (cancelled) return;
+        setAgent(built);
+        if (built.stack) setStack(built.stack);
         step(1);
-        if (agent.stack) setStack(agent.stack);
-        // The scheme facts come with the agent (built-in packs checked against
-        // official sources); this step confirms they're attached.
+        // The cards came with the agent (Verified and Partly verified rows only).
         await new Promise((r) => setTimeout(r, 450));
         step(2);
-        if (!agent.stack) throw new Error(agent.stack_error || `Test calls in ${languageName} aren't available yet.`);
-        const prepared = await prepareTryCall(schemeIds, language, agent.greeting);
+        if (!built.stack) throw new Error(built.stack_error || `Test calls in ${languageName} aren't available yet.`);
+        const prepared = await prepareTryCall(body, built.greeting);
         if (cancelled) return;
         setStack(prepared.stack);
         step(3);
@@ -72,7 +79,7 @@ export function Creating({
         if (cancelled) return;
         step(4);
         await new Promise((r) => setTimeout(r, 500));
-        if (!cancelled) finish.current({ agent, prepared, callId: call_id });
+        if (!cancelled) finish.current({ agent: { ...built, opening: prepared.opening }, prepared, callId: call_id });
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : "Something went wrong.");
       }
@@ -80,7 +87,7 @@ export function Creating({
     return () => {
       cancelled = true;
     };
-  }, [schemeIds, language, languageName, attempt]);
+  }, [key, languageName, attempt]);
 
   return (
     <section className="mx-auto flex w-full max-w-[560px] flex-col items-center px-4 pb-16 pt-14 text-center sm:px-6 animate-v-rise">
@@ -114,7 +121,7 @@ export function Creating({
         {steps.map((label, i) => {
           const state = i < done ? "done" : i === done && !error ? "active" : "waiting";
           return (
-            <li key={label} className="flex items-center gap-3 text-[15px]">
+            <li key={i} className="flex items-center gap-3 text-[15px]">
               <span className="flex size-5 shrink-0 items-center justify-center">
                 {state === "done" ? (
                   <Check className="size-5 text-v-fg animate-v-pop" strokeWidth={2.4} />
@@ -124,9 +131,7 @@ export function Creating({
                   <span className="size-[18px] rounded-full border-2 border-v-line-strong" />
                 )}
               </span>
-              <span className={state === "active" ? "font-semibold text-v-fg" : state === "done" ? "text-v-fg" : "text-v-muted"}>
-                {label}
-              </span>
+              <span className={state === "active" ? "font-semibold text-v-fg" : state === "done" ? "text-v-fg" : "text-v-muted"}>{label}</span>
             </li>
           );
         })}
@@ -155,7 +160,7 @@ export function Creating({
 
       <div className="mt-8 flex w-full items-center justify-between gap-3">
         <span className="font-mono text-[10.5px] font-semibold uppercase tracking-[.14em] text-v-muted-2">Runs on a fixed stack</span>
-        <span className="text-[13px] text-v-muted">Change it after you sign in</span>
+        <span className="text-[13px] text-v-muted">Same for every demo agent</span>
       </div>
       <div className="mt-3 grid w-full grid-cols-1 gap-2.5 text-left sm:grid-cols-3">
         {(

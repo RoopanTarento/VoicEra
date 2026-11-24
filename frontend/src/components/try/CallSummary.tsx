@@ -4,8 +4,9 @@ import { useEffect, useState } from "react";
 import { Check } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Spinner } from "@/components/ui/Spinner";
-import { summariseTryCall, type TryCallSummary, type TryScheme } from "@/lib/api/try-agent";
 import type { EndedCall } from "@/components/try/LiveCall";
+import { summariseTryCall, type CallRef, type TryCallSummary } from "@/lib/api/try-agent";
+import { showValue } from "@/lib/demo-copy";
 
 const LAUNCH_BENEFITS = ["Get a phone number", "Upload a contact list", "Run a campaign", "See how every call went"];
 
@@ -15,20 +16,20 @@ function duration(total: number): string {
   return m ? `${m} min ${s} s` : `${s} s`;
 }
 
-/** After the test call: what happened on it, and the way to launch for real. */
+/** After the test call: the template's call record, and the way to launch for real. */
 export function CallSummary({
   call,
+  callRef,
   language,
   languageName,
-  schemes,
   onCallAgain,
   onAnotherLanguage,
   onSignIn,
 }: {
   call: EndedCall;
+  callRef: CallRef;
   language: string;
   languageName: string;
-  schemes: TryScheme[];
   onCallAgain: () => void;
   onAnotherLanguage: () => void;
   onSignIn: () => void;
@@ -40,7 +41,7 @@ export function CallSummary({
   useEffect(() => {
     let cancelled = false;
     summariseTryCall(
-      schemes.map((s) => s.id),
+      callRef,
       call.transcript.map((l) => ({ role: l.role, text: l.text })),
     )
       .then((s) => !cancelled && setSummary(s))
@@ -48,16 +49,9 @@ export function CallSummary({
     return () => {
       cancelled = true;
     };
-  }, [call, schemes]);
+  }, [call, callRef]);
 
-  const name = (id: string) => schemes.find((s) => s.id === id)?.name ?? id;
-  const rows: [string, React.ReactNode, boolean][] = summary
-    ? [
-        ["Schemes that may fit", summary.fit.length ? summary.fit.map(name).join(", ") : "None yet", true],
-        ["Also explained", summary.explained.length ? summary.explained.map(name).join(", ") : "None", false],
-        ["Outcome", summary.outcome, false],
-      ]
-    : [];
+  const nothing = summary && summary.fields.every((f) => f.value === null || (Array.isArray(f.value) && !f.value.length));
 
   return (
     <section className="mx-auto grid w-full max-w-6xl grid-cols-1 gap-8 px-4 pb-16 pt-10 sm:px-6 lg:grid-cols-[minmax(0,1fr)_400px] lg:gap-12 lg:pt-14 animate-v-rise">
@@ -69,12 +63,20 @@ export function CallSummary({
 
         <div className="mt-7 overflow-hidden rounded-v-xl border border-v-line bg-white">
           {summary ? (
-            rows.map(([label, value, strong]) => (
-              <div key={label} className="flex items-baseline justify-between gap-6 border-b border-v-line px-5 py-4 last:border-b-0">
-                <span className="text-[14.5px] text-v-muted-2">{label}</span>
-                <span className={`text-right text-[16px] ${strong ? "font-semibold text-v-fg" : "text-v-fg"}`}>{value}</span>
-              </div>
-            ))
+            <>
+              {summary.fields.map((f, i) => (
+                <div key={f.key} className="flex items-baseline justify-between gap-6 border-b border-v-line px-5 py-4 last:border-b-0">
+                  <span className="shrink-0 text-[14.5px] text-v-muted-2">{f.label}</span>
+                  <span className={`text-right text-[16px] ${i === 0 ? "font-semibold" : ""} text-v-fg`}>{showValue(f.value)}</span>
+                </div>
+              ))}
+              {summary.gaps.length ? (
+                <div className="flex items-baseline justify-between gap-6 px-5 py-4">
+                  <span className="shrink-0 text-[14.5px] text-v-muted-2">Couldn&apos;t answer</span>
+                  <span className="text-right text-[15px] text-v-fg">{summary.gaps.join(" · ")}</span>
+                </div>
+              ) : null}
+            </>
           ) : summaryError ? (
             <p className="m-0 px-5 py-4 text-[14px] text-v-muted-2">Couldn&apos;t sum up this call. The full transcript is below.</p>
           ) : (
@@ -83,6 +85,7 @@ export function CallSummary({
             </p>
           )}
         </div>
+        {nothing ? <p className="m-0 mt-3 text-[13.5px] text-v-muted-2">The call ended before the agent could note anything.</p> : null}
 
         {call.transcript.length ? (
           <button
@@ -107,6 +110,7 @@ export function CallSummary({
             ))}
           </ol>
         ) : null}
+        <p className="m-0 mt-4 text-[13px] text-v-muted">Nothing from this call is kept: no audio is stored, and this transcript goes when you leave.</p>
 
         <div className="mt-6 flex flex-wrap gap-3">
           <Button variant="outline" onClick={onCallAgain}>
@@ -120,9 +124,7 @@ export function CallSummary({
 
       <aside className="flex h-fit flex-col gap-5 rounded-[24px] bg-v-fg px-7 py-8 text-white">
         <h2 className="m-0 text-[22px] font-semibold tracking-tight">Ready to call real people?</h2>
-        <p className="m-0 text-[14.5px] font-light leading-relaxed text-white/70">
-          Sign in and this agent moves to your workspace, where you can:
-        </p>
+        <p className="m-0 text-[14.5px] font-light leading-relaxed text-white/70">Sign in and this agent moves to your workspace, where you can:</p>
         <ul className="m-0 flex list-none flex-col gap-3 p-0">
           {LAUNCH_BENEFITS.map((b) => (
             <li key={b} className="flex items-center gap-3 text-[16px]">

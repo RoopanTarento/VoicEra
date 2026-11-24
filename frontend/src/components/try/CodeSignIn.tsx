@@ -9,8 +9,8 @@ import { Spinner } from "@/components/ui/Spinner";
 import { markWalkthroughPending } from "@/components/walkthrough";
 import { saveSession } from "@/lib/auth-storage";
 import {
-  clearTryDraft,
-  readTryDraft,
+  clearDemoDraft,
+  readDemoDraft,
   requestLoginCode,
   saveTriedAgent,
   verifyLoginCode,
@@ -56,20 +56,21 @@ export function CodeSignIn({ agentLabel }: { agentLabel: string }) {
       });
       if (data.is_first_login) markWalkthroughPending();
       setStage("saving");
-      const draft = readTryDraft();
+      const draft = readDemoDraft();
       if (!draft) {
         router.push("/dashboard");
         return;
       }
       try {
         const saved = await saveTriedAgent(draft);
-        clearTryDraft();
+        clearDemoDraft();
         // Their agents list, where the first-login tour runs, with a note that it's saved.
         router.push(`/dashboard?saved=${encodeURIComponent(saved.name)}`);
-      } catch {
-        // The workspace can't build it on its own providers yet: finish in the
-        // quick setup, which keeps the schemes and language from the draft.
-        router.push("/agent-creation?quick=1&from=try");
+      } catch (err) {
+        // The workspace has no providers for this language yet: the draft
+        // stays, and the dashboard says what to connect.
+        const why = err instanceof Error ? err.message : "";
+        router.push(`/dashboard?unsaved=${encodeURIComponent(why || "Connect a speech and voice provider to save this agent.")}`);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Couldn't sign you in.");

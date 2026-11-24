@@ -14,8 +14,10 @@ import {
   useRTVIClientEvent,
   type ConversationMessage,
 } from "@pipecat-ai/client-react";
+import { RoleCard } from "@/components/try/Ready";
 import { Button } from "@/components/ui/Button";
-import { translateLines } from "@/lib/api/try-agent";
+import { getCallProgress, translateLines, type DemoRole } from "@/lib/api/try-agent";
+import { maskPersonal } from "@/lib/mask";
 import {
   createBrowserPipecatClient,
   getBrowserWsUrl,
@@ -51,18 +53,25 @@ function clock(total: number): string {
   return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
 }
 
-/** The browser test call: the agent on the left, the live transcript (with
- * English under each line) on the right. Ends on End call, when the agent
- * hangs up, or after ``maxSeconds``. */
-export function LiveCall(props: {
+interface StageProps {
   orgId: string;
   agentId: string;
   callId: string;
+  previewToken: string;
   language: string;
   maxSeconds: number;
+  role: DemoRole;
+  /** The team's review build: tag each agent line with its flow and step. */
+  review: boolean;
   onEnded: (call: EndedCall) => void;
   onFailed: () => void;
-}) {
+}
+
+/** The browser test call: the agent and the tester's role card on the left,
+ * the live transcript (with English under each line) on the right. Ends on End
+ * call, when the agent hangs up, or after ``maxSeconds``. What the tester says
+ * is masked on screen (long numbers, codes, emails). */
+export function LiveCall(props: StageProps) {
   const client = useMemo(() => createBrowserPipecatClient(), []);
   useEffect(() => {
     return () => {
@@ -77,23 +86,7 @@ export function LiveCall(props: {
   );
 }
 
-function Stage({
-  orgId,
-  agentId,
-  callId,
-  language,
-  maxSeconds,
-  onEnded,
-  onFailed,
-}: {
-  orgId: string;
-  agentId: string;
-  callId: string;
-  language: string;
-  maxSeconds: number;
-  onEnded: (call: EndedCall) => void;
-  onFailed: () => void;
-}) {
+function Stage({ orgId, agentId, callId, previewToken, language, maxSeconds, role, review, onEnded, onFailed }: StageProps) {
   const client = usePipecatClient();
   const transport = usePipecatClientTransportState();
   const { enableMic } = usePipecatClientMicControl();
@@ -104,6 +97,8 @@ function Stage({
   const [micOn, setMicOn] = useState(true);
   const [error, setError] = useState("");
   const [english, setEnglish] = useState<Record<string, string | null>>({});
+  // Review build: the flow and step each agent line was spoken at.
+  const [tags, setTags] = useState<Record<string, string>>({});
   // The brand accent, read from the design tokens (the visualizer draws on a canvas).
   const [accent] = useState(() =>
     typeof document === "undefined"
@@ -125,10 +120,11 @@ function Stage({
           const role =
             m.role === "assistant" ? ("agent" as const) : ("user" as const);
           const key = `${role}-${m.createdAt}`;
+          const raw = messageText(m);
           return {
             key,
             role,
-            text: messageText(m),
+            text: role === "user" ? maskPersonal(raw) : raw,
             english: english[key] ?? null,
             final: m.final !== false,
           };
@@ -232,6 +228,28 @@ function Stage({
       )
       .finally(() => todo.forEach((l) => pending.current.delete(l.key)));
   }, [lines, english, language]);
+
+  // Review build only: poll the server-held flow state and tag the latest agent line.
+  useEffect(() => {
+    if (!review || !connected) return;
+    let stop = false;
+    const tick = async () => {
+      try {
+        const p = await getCallProgress({ agent_id: agentId, preview_token: previewToken, call_id: callId });
+        const last = [...linesRef.current].reverse().find((l) => l.role === "agent");
+        if (!stop && last && p.active_flow) {
+          setTags((prev) => (prev[last.key] ? prev : { ...prev, [last.key]: `${p.active_flow} · step ${p.step}` }));
+        }
+      } catch {
+        /* tags are a review aid; ignore */
+      }
+    };
+    const id = window.setInterval(() => void tick(), 2000);
+    return () => {
+      stop = true;
+      window.clearInterval(id);
+    };
+  }, [review, connected, agentId, previewToken, callId]);
 
   useRTVIClientEvent(
     RTVIEvent.BotStartedSpeaking,
@@ -342,11 +360,14 @@ function Stage({
             </Button>
           </div>
         )}
+        <div className="w-full max-w-[420px]">
+          <RoleCard role={role} compact />
+        </div>
       </div>
 
       <div className="flex min-h-0 flex-col gap-3">
         <span className="font-mono text-[10.5px] font-semibold uppercase tracking-[.14em] text-v-muted-2">
-          Live transcript
+          Live transcript · one question per turn
         </span>
         <div
           ref={transcriptRef}
@@ -373,8 +394,16 @@ function Stage({
               {l.english ? (
                 <span className="text-[14px] text-v-muted-2">{l.english}</span>
               ) : null}
+              {review && tags[l.key] ? (
+                <span className="font-mono text-[10.5px] font-semibold uppercase tracking-[.08em] text-v-accent">
+                  {tags[l.key]}
+                </span>
+              ) : null}
             </div>
           ))}
+          {review ? (
+            <span className="text-[12px] text-v-muted">Step tags are for the team&apos;s review build only, not shown to visitors.</span>
+          ) : null}
           {connected && !botSpeaking ? (
             <span className="flex items-center gap-2 text-[14px] text-v-muted-2">
               <span className="flex gap-1" aria-hidden="true">

@@ -18,6 +18,7 @@ import urllib.request
 from app.config import settings
 from app.database import connect_to_mongo, get_database
 from app.services import auth_service, try_agent, try_stack
+from app.services.demo import kb
 
 OK, NO, WARN = "  [ok]  ", "  [!!]  ", "  [..]  "
 CALL_LANGUAGES = [code for code, _name, _native in try_agent.LANGUAGES]
@@ -34,6 +35,18 @@ def _workspaces_with_ai_keys() -> list[str]:
             org = get_database()["Organizations"].find_one({"org_id": doc["org_id"]}, {"name": 1}) or {}
             rows.append(f"{doc['org_id']}  ({org.get('name') or 'unnamed'})  has {provider}")
     return rows
+
+
+def _knowledge_base() -> None:
+    print("\n0. Knowledge base (templates, sectors, cards, flows)")
+    snap = kb.current()
+    _line(
+        OK,
+        f"Version {snap['kb_version']}: {len(snap['templates'])} templates, {len(snap['sectors'])} sectors, "
+        f"{len(snap['cards'])} cards, {len(snap['flows'])} flows.",
+    )
+    if snap["kb_version"].startswith("bundled-"):
+        _line(WARN, "Using the bundled copy. Publish an update with: python -m app.services.demo.kb publish <file.xlsx>")
 
 
 async def _text_model() -> bool:
@@ -82,15 +95,22 @@ def _model_server() -> None:
 def _call_stacks(lent: set[str]) -> None:
     print("\n4. What each language's test call runs on")
     usable = set(auth_service.available_providers(try_agent.PREVIEW_ORG_ID)) | lent
+    missing = []
     for lang in CALL_LANGUAGES:
         try:
             models = try_stack.build_models(lang, usable)
         except try_stack.StackError as exc:
-            _line(NO, f"{lang}: {exc} Visitors can't pick {lang}. Lend a key that covers it (Sarvam or Google cover every"
-                      " Indian language; OpenAI only English and Hindi voices) or run the speech model server.")
+            _line(NO, f"{lang}: {exc}")
+            missing.append(lang)
             continue
         parts = [models[key]["provider"] for key in ("stt_config", "llm_config", "tts_config")]
         _line(OK, f"{lang}: " + " → ".join(parts))
+    if missing:
+        print(
+            f"        Visitors can't pick {', '.join(missing)}. Run the speech model server (IndicConformer and Maya 2 "
+            "cover every offered language; English listens with Indic-Transcribe or Indic Nemotron), or lend a "
+            "Sarvam or Google key."
+        )
 
 
 def _runtime() -> None:
@@ -112,6 +132,7 @@ async def main() -> int:
     logging.disable(logging.WARNING)  # the report below says the same, plainly
     connect_to_mongo()
     print("VoicEra public preview (/try) readiness")
+    _knowledge_base()
     text_ok = await _text_model()
     lent = _lending()
     _model_server()

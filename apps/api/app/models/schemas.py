@@ -414,6 +414,13 @@ class AgentConfigPayload(BaseModel):
         ),
     )
     use_case: Optional[AgentUseCase] = None
+    demo: Optional[dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Set by the no-login demo builder: template, sector, knowledge-base version, flows "
+            "and cards. The voice runtime gives such agents the demo's six tools."
+        ),
+    )
 
     @model_validator(mode="before")
     @classmethod

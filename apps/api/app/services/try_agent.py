@@ -1,22 +1,23 @@
-"""Build and test-call a scheme discovery agent before signing up (/try).
+"""The no-login demo agent builder (/ and /try): build an agent in three
+questions, test-call it in the browser, then sign in to keep it.
 
-A visitor picks built-in schemes and a language and gets the same agent a
-signed-in user would get (``use_cases.build_preset``). For the test call the
-server creates a short-lived copy of that agent in a hidden preview
-workspace, on a fixed stack (``try_stack``), and the browser calls it through
-the normal voice runtime. After sign-in, ``save_to_workspace`` creates the
-real agent in the visitor's own workspace.
+The agent itself is assembled by ``app.services.demo`` from the knowledge-base
+snapshot (templates, sectors, cards, flows, guardrails). This module is the
+public edge around it: the router and opening-line model calls, the hidden
+preview workspace, the preview token, the fixed call stack and usage caps.
 
 Everything here runs on platform keys, so it is bounded:
 
-- Prompts are always rebuilt on the server from scheme ids; the browser can't
-  send its own, so none of this is an open LLM or voice proxy.
+- Prompts are always assembled on the server from ids in the knowledge base;
+  the browser can't send its own, so none of this is an open LLM or voice proxy.
 - Preview agents expire after ``TRY_AGENT_TTL_MINUTES`` and need the random
   preview token returned when they were made.
 - Usage caps per visitor IP per hour and across everyone per day, counted in
   ``TryTurns`` (shared by every API process; entries expire after a day):
-  ``turn`` for text work (greeting, transcript translation, call summary) and
-  ``call`` for test calls.
+  ``turn`` for text work (router, opening line, translation, call summary,
+  added documents) and ``call`` for test calls.
+- Preview calls store no audio and no transcript; their state expires with
+  the preview agent.
 """
 
 from __future__ import annotations
@@ -33,7 +34,8 @@ from openai import AsyncOpenAI
 
 from app.config import settings
 from app.database import get_database
-from app.services import auth_service, org_service, try_stack, use_cases
+from app.services import auth_service, org_service, try_stack
+from app.services.demo import builder, calls, kb, sources
 
 logger = logging.getLogger(__name__)
 
@@ -44,29 +46,11 @@ PREVIEW_CREATOR = "preview@voicera.internal"
 MAX_TEXTS = 12
 MAX_CHARS = 600
 MAX_TRANSCRIPT_TURNS = 60
-MAX_GREETING_CHARS = 300
+MAX_GREETING_CHARS = 400
 MAX_REPLY_TOKENS = 600
 
-# Offered on the try page, in the order shown (codes match apps/providers/languages.py).
-LANGUAGES: list[tuple[str, str, str]] = [
-    ("kn", "Kannada", "ಕನ್ನಡ"),
-    ("hi", "Hindi", "हिन्दी"),
-    ("en", "English", "English"),
-    ("mr", "Marathi", "मराठी"),
-    ("ta", "Tamil", "தமிழ்"),
-    ("te", "Telugu", "తెలుగు"),
-    ("bn", "Bengali", "বাংলা"),
-    ("gu", "Gujarati", "ગુજરાતી"),
-    ("ml", "Malayalam", "മലയാളം"),
-    ("pa", "Punjabi", "ਪੰਜਾਬੀ"),
-    ("od", "Odia", "ଓଡ଼ିଆ"),
-]
-_LANGUAGE_NAMES = {code: name for code, name, _ in LANGUAGES}
-
-# The preset's greeting names the caller's organisation; a preview has none.
-PREVIEW_WELCOME = "Namaste! I'm an assistant who shares information about government schemes. Is this a good time to talk?"
-
-OUTCOMES = ("Shared how to apply", "Checked eligibility", "Not eligible for these schemes", "Call ended early")
+LANGUAGES = builder.LANGUAGES
+_LANGUAGE_NAMES = builder.LANGUAGE_NAMES
 
 _BASE_URLS: dict[str, str | None] = {
     "openai": None,
@@ -76,22 +60,22 @@ _BASE_URLS: dict[str, str | None] = {
 _DEFAULT_MODELS = try_stack.PREVIEW_LLM_MODELS
 
 _TRANSLATE_TO_PROMPT = (
-    "Translate this opening line of a phone call into natural spoken {language}, in its "
-    "own script. Reply with only the translation.\n\n{text}"
+    "Translate each numbered line, from the start of a government helpline phone call, into natural "
+    "spoken {language} in its own script. Keep names, numbers and scheme names. Reply with only the "
+    "numbered translations, one per line.\n\n{lines}"
 )
 _TRANSLATE_FROM_PROMPT = (
     "Translate each numbered line from a phone call into plain English. Keep the "
     "numbers. Reply with only the numbered translations, one per line.\n\n{lines}"
 )
-_SUMMARY_PROMPT = """A citizen just had a test call with a government scheme discovery agent.
-Schemes the agent knows (id: name): {schemes}
+_RECORDS_PROMPT = """A member of the public just had a test call with a government voice agent ({template}).
+Fill in the call record from the transcript. Fields: {fields}.
 
 Transcript:
 {transcript}
 
-Reply with only JSON: {{"fit": [ids of schemes the agent said may fit the caller],
-"explained": [ids of other schemes it explained], "outcome": one of {outcomes}}}.
-Use only ids from the list. If nothing was explained, use empty lists and "Call ended early"."""
+Reply with only JSON: one key per field. Use "yes"/"no" for yes/no fields, a short
+phrase or a list of short phrases otherwise, and null when the call didn't get to it."""
 
 
 class TryError(Exception):
@@ -125,19 +109,15 @@ def _collection():
 # --- catalogue and agent text ----------------------------------------------------------
 
 
+def snapshot() -> dict[str, Any]:
+    return kb.current()
+
+
 def catalogue() -> dict[str, Any]:
-    """Built-in schemes (no organisation's own) and the offered languages."""
-    data = use_cases.catalogue("")
-    keep = ("id", "name", "category", "summary", "benefit")
-    schemes = [{k: s.get(k) for k in keep} for s in data["schemes"] if not s.get("custom")]
-    discovery = next((i for i in data["intents"] if i["id"] == "discovery"), None)
-    return {
-        "schemes": schemes,
-        "languages": [{"code": c, "name": n, "native": native} for c, n, native in LANGUAGES],
-        "max_schemes": discovery.get("max_schemes") if discovery else None,
-        "facts_checked": data.get("facts_checked"),
-        "max_call_seconds": settings.TRY_CALL_MAX_SECONDS,
-    }
+    """Templates, sectors and languages for the landing page and the questions."""
+    data = builder.catalogue(snapshot())
+    data["max_call_seconds"] = settings.TRY_CALL_MAX_SECONDS
+    return data
 
 
 def language_name(code: str) -> str:
@@ -147,23 +127,29 @@ def language_name(code: str) -> str:
     return name
 
 
-def _scheme_ids(scheme_ids: list[str]) -> list[str]:
-    ids = [s for s in dict.fromkeys(scheme_ids) if isinstance(s, str)]
-    builtin = {s["id"] for s in catalogue()["schemes"]}
-    if not ids or any(i not in builtin for i in ids):
-        raise TryError("Pick at least one of the listed schemes.")
-    return ids
+def _build_error(exc: builder.BuildError) -> TryError:
+    return TryError(str(exc), exc.status_code)
 
 
-def build_agent(scheme_ids: list[str], language: str) -> dict[str, Any]:
-    """The discovery agent for these schemes, as a signed-in user would get it."""
-    language_name(language)
-    ids = _scheme_ids(scheme_ids)
+def sources_view(template_id: str, sector_id: str, topic: str = "") -> dict[str, Any]:
+    """What Q1 and Q2 show for this template and sector."""
     try:
-        preset = use_cases.build_preset("", use_case="scheme", intent="discovery", scheme_ids=ids)
-    except use_cases.UseCaseError as exc:
+        return builder.sources(snapshot(), template_id, sector_id, topic)
+    except builder.BuildError as exc:
+        raise _build_error(exc) from exc
+
+
+def assemble(answers: dict[str, Any], snap: dict[str, Any] | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
+    """(snapshot, agent config) for the visitor's answers, with any added documents."""
+    snap = snap or snapshot()
+    try:
+        session_cards = sources.cards_for(list(answers.get("source_ids") or []))
+    except sources.SourceError as exc:
         raise TryError(str(exc), exc.status_code) from exc
-    return {**preset, "welcome": PREVIEW_WELCOME, "scheme_ids": ids}
+    try:
+        return snap, builder.assemble(snap, answers, session_cards)
+    except builder.BuildError as exc:
+        raise _build_error(exc) from exc
 
 
 def _clean_greeting(greeting: str | None) -> str | None:
@@ -286,20 +272,70 @@ async def _complete(prompt: str) -> str:
     return text
 
 
-async def opening_line(scheme_ids: list[str], language: str, ip: str | None) -> dict[str, Any]:
-    """Agent name, its opening line in ``language`` (with the English) and the scheme count."""
-    agent = build_agent(scheme_ids, language)
-    greeting = agent["welcome"]
+async def _translate_lines(language: str, lines: list[str]) -> list[str]:
+    numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(lines))
+    text = await _complete(_TRANSLATE_TO_PROMPT.format(language=language_name(language), lines=numbered))
+    found: dict[int, str] = {}
+    for row in text.splitlines():
+        m = re.match(r"\s*(\d+)[.)]\s*(.+)", row)
+        if m:
+            found[int(m.group(1))] = m.group(2).strip().strip('"“”')
+    if any(i + 1 not in found for i in range(len(lines))):
+        raise TryError("That didn't work just now. Try again in a moment.", status_code=502)
+    return [found[i + 1] for i in range(len(lines))]
+
+
+# The AI and demo notice (G-01, G-02) in each language, translated once per
+# process. It is always added on the server, so a visitor can edit the
+# greeting but can't drop the notice.
+_NOTICES: dict[str, str] = {"en": builder.NOTICE}
+
+
+async def notice_in(language: str) -> str:
+    if language not in _NOTICES:
+        _NOTICES[language] = (await _translate_lines(language, [builder.NOTICE]))[0]
+    return _NOTICES[language]
+
+
+async def build(answers: dict[str, Any], ip: str | None) -> dict[str, Any]:
+    """What the "Creating your agent" and "Agent ready" screens show: the
+    greeting (in the call language, with the English), the notice it always
+    carries, what the agent loaded, who the tester plays and the call stack."""
+    snap, config = assemble(answers)
+    t = builder.template(snap, config["template_id"])
+    s = builder.sector(snap, config["sector_id"])
+    english = builder.opening_line(snap, config)
+    language = config["language"]
+    greeting, notice = english["greeting"], builder.NOTICE
     if language != "en":
         check_and_count(ip, "turn")
-        greeting = await _complete(_TRANSLATE_TO_PROMPT.format(language=language_name(language), text=agent["welcome"]))
-        greeting = greeting.strip().strip('"“”')
-    return {
-        "name": agent["name"],
+        if language in _NOTICES:
+            greeting = (await _translate_lines(language, [english["greeting"]]))[0]
+        else:
+            greeting, notice = await _translate_lines(language, [english["greeting"], builder.NOTICE])
+            _NOTICES[language] = notice
+    result: dict[str, Any] = {
+        "name": f"{t['name']} · {s['name']}",
+        "template": {"template_id": t["template_id"], "name": t["name"], "job": t["job"]},
+        "sector": {"sector_id": s["sector_id"], "name": s["name"]},
+        "language": language,
         "greeting": greeting,
-        "english": agent["welcome"] if language != "en" else None,
-        "scheme_ids": agent["scheme_ids"],
+        "greeting_english": english["greeting"] if language != "en" else None,
+        "notice": notice,
+        "opening": builder.compose_opening(greeting, notice),
+        "opening_english": english["opening"] if language != "en" else None,
+        "cards": len(config["card_ids"]) + len(config["session_cards"]),
+        "session_cards": len(config["session_cards"]),
+        "flows": len(config["flows"]),
+        "role": config["role"],
+        "kb_version": config["kb_version"],
     }
+    try:
+        result["stack"] = try_stack.describe(stack_for(language))
+    except TryError as exc:
+        result["stack"] = None
+        result["stack_error"] = str(exc)
+    return result
 
 
 async def to_english(language: str, texts: list[str], ip: str | None) -> list[str | None]:
@@ -323,35 +359,29 @@ async def to_english(language: str, texts: list[str], ip: str | None) -> list[st
     return [found.get(i + 1) if lines[i] else None for i in range(len(lines))]
 
 
-async def summarise(scheme_ids: list[str], transcript: list[dict[str, Any]], ip: str | None) -> dict[str, Any]:
-    """Which schemes may fit, which were also explained, and how the call ended."""
-    ids = _scheme_ids(scheme_ids)
-    turns = [
-        (str(t.get("role")), re.sub(r"\s+", " ", str(t.get("text") or "")).strip()[:MAX_CHARS])
-        for t in transcript[:MAX_TRANSCRIPT_TURNS]
-        if t.get("role") in ("agent", "user")
-    ]
-    turns = [(r, t) for r, t in turns if t]
-    if not any(r == "user" for r, _ in turns):
-        return {"fit": [], "explained": [], "outcome": "Call ended early"}
-    names = {s["id"]: s["name"] for s in catalogue()["schemes"] if s["id"] in ids}
+async def route(text: str, ip: str | None) -> dict[str, Any]:
+    """The router prompt: template, sector, topic and language for a typed description."""
     check_and_count(ip, "turn")
-    text = await _complete(
-        _SUMMARY_PROMPT.format(
-            schemes="; ".join(f"{i}: {n}" for i, n in names.items()),
-            transcript="\n".join(f"{'Agent' if r == 'agent' else 'Caller'}: {t}" for r, t in turns),
-            outcomes=", ".join(f'"{o}"' for o in OUTCOMES),
-        )
-    )
-    match = re.search(r"\{.*\}", text, re.S)
     try:
-        data = json.loads(match.group(0)) if match else {}
-    except json.JSONDecodeError:
-        data = {}
-    fit = [i for i in dict.fromkeys(data.get("fit") or []) if i in names]
-    explained = [i for i in dict.fromkeys(data.get("explained") or []) if i in names and i not in fit]
-    outcome = data.get("outcome") if data.get("outcome") in OUTCOMES else "Call ended early"
-    return {"fit": fit, "explained": explained, "outcome": outcome}
+        return await builder.route(snapshot(), text, _complete)
+    except builder.BuildError as exc:
+        raise _build_error(exc) from exc
+
+
+async def add_link(url: str, ip: str | None) -> dict[str, Any]:
+    check_and_count(ip, "turn")
+    try:
+        return await sources.from_link(url)
+    except sources.SourceError as exc:
+        raise TryError(str(exc), exc.status_code) from exc
+
+
+def add_upload(filename: str, data: bytes, ip: str | None) -> dict[str, Any]:
+    check_and_count(ip, "turn")
+    try:
+        return sources.from_upload(filename, data)
+    except sources.SourceError as exc:
+        raise TryError(str(exc), exc.status_code) from exc
 
 
 # --- test call -------------------------------------------------------------------------
@@ -370,10 +400,20 @@ def _token_hash(token: str) -> str:
 
 
 def _sweep_expired() -> None:
-    """Remove preview agents past their expiry (they're never shown to anyone)."""
-    get_database()["Agents"].delete_many(
-        {"org_id": PREVIEW_ORG_ID, "try_preview.expires_at": {"$lt": _now().isoformat()}}
-    )
+    """Remove preview agents past their expiry with their call logs and call
+    state (they're never shown to anyone, and the demo keeps nothing)."""
+    db = get_database()
+    expired = [
+        d["agent_id"]
+        for d in db["Agents"].find(
+            {"org_id": PREVIEW_ORG_ID, "try_preview.expires_at": {"$lt": _now().isoformat()}}, {"agent_id": 1, "_id": 0}
+        )
+    ]
+    if not expired:
+        return
+    db["CallLogs"].delete_many({"org_id": PREVIEW_ORG_ID, "agent_id": {"$in": expired}})
+    calls.delete_for_agents(PREVIEW_ORG_ID, expired)
+    db["Agents"].delete_many({"org_id": PREVIEW_ORG_ID, "agent_id": {"$in": expired}})
 
 
 def stack_for(language: str, org_id: str = PREVIEW_ORG_ID) -> dict[str, dict[str, Any]]:
@@ -401,10 +441,14 @@ def call_languages() -> list[str]:
     return ready
 
 
-def _agent_config(agent: dict[str, Any], language: str, greeting: str, models: dict[str, Any], *, preview: bool) -> dict[str, Any]:
+def _agent_config(
+    snap: dict[str, Any], config: dict[str, Any], opening: str, models: dict[str, Any], *, preview: bool
+) -> dict[str, Any]:
+    _, state_text = builder.initial_state_text(snap, config, opening)
+    demo = {k: v for k, v in config.items() if k != "values"} | {"preview": preview, "values": config["values"]}
     return {
         "schema_version": 1,
-        "prompts": {"system_prompt": agent["prompt"], "greeting_message": greeting},
+        "prompts": {"system_prompt": builder.system_prompt(snap, config, opening, state_text), "greeting_message": opening},
         "behaviour": {
             "interruption_min_words": 0,
             "user_silence_hangup_seconds": 20 if preview else 30,
@@ -417,13 +461,15 @@ def _agent_config(agent: dict[str, Any], language: str, greeting: str, models: d
             "user_online_detection_seconds": None,
             "user_online_detection_repeats": None,
             "user_online_detection_closing_message": "",
-            "automatic_call_ending": {"enabled": True, "graceful_llm_call_ending": True},
+            # The demo's own end_call tool ends the call (and saves the call record).
+            "automatic_call_ending": {"enabled": False, "graceful_llm_call_ending": False},
         },
-        "language": {"primary": language, "secondary": []},
+        "language": {"primary": config["language"], "secondary": []},
         "models": models,
         "knowledge_base": {"enabled": False, "mode": "context", "document_ids": [], "top_k": 5},
         "custom_variables": {},
-        "use_case": agent.get("use_case"),
+        "use_case": None,
+        "demo": demo,
     }
 
 
@@ -439,21 +485,35 @@ async def _create(org_id: str, email: str, name: str, config: dict[str, Any]) ->
         raise TryError("Couldn't set up the agent's voice. Try another language.", status_code=503) from exc
 
 
-async def prepare_call(scheme_ids: list[str], language: str, greeting: str | None, ip: str | None) -> dict[str, Any]:
+async def _opening(config: dict[str, Any], greeting: str | None, snap: dict[str, Any]) -> str:
+    """The spoken opening: the visitor's greeting (or the template's), always with the notice."""
+    language = config["language"]
+    text = _clean_greeting(greeting)
+    if not text:
+        english = builder.opening_line(snap, config)
+        if language == "en":
+            return english["opening"]
+        text = (await _translate_lines(language, [english["greeting"]]))[0]
+    return builder.compose_opening(text, await notice_in(language))
+
+
+async def prepare_call(answers: dict[str, Any], greeting: str | None, ip: str | None) -> dict[str, Any]:
     """A short-lived agent the browser can call, on the fixed preview stack."""
-    agent = build_agent(scheme_ids, language)
-    opening = _clean_greeting(greeting) or agent["welcome"]
+    snap, config = assemble(answers)
     _ensure_preview_org()
-    models = stack_for(language)
+    models = stack_for(config["language"])
     check_and_count(ip, "call")
     _sweep_expired()
+    opening = await _opening(config, greeting, snap)
+    t = builder.template(snap, config["template_id"])
+    s = builder.sector(snap, config["sector_id"])
     created = await _create(
         # Every visitor's agent lives in the one preview workspace, where names
         # must be unique, so each gets a short random suffix.
         PREVIEW_ORG_ID,
         PREVIEW_CREATOR,
-        f"{agent['name'][:70]} · {secrets.token_hex(3)}",
-        _agent_config(agent, language, opening, models, preview=True),
+        f"{t['name']} · {s['name']} · {secrets.token_hex(3)}",
+        _agent_config(snap, config, opening, models, preview=True),
     )
     token = secrets.token_urlsafe(24)
     expires = _now() + timedelta(minutes=settings.TRY_AGENT_TTL_MINUTES)
@@ -468,6 +528,7 @@ async def prepare_call(scheme_ids: list[str], language: str, greeting: str | Non
         "expires_at": expires.isoformat(),
         "max_call_seconds": settings.TRY_CALL_MAX_SECONDS,
         "stack": try_stack.describe(models),
+        "opening": opening,
     }
 
 
@@ -478,34 +539,113 @@ def stack_names(language: str) -> dict[str, str]:
     return try_stack.describe(stack_for(language))
 
 
-def register_call(agent_id: str, preview_token: str) -> dict[str, Any]:
-    """A call id for a preview agent this visitor made (checked by its token)."""
-    from app.services import web_call_service
-
-    doc = get_database()["Agents"].find_one({"org_id": PREVIEW_ORG_ID, "agent_id": agent_id}, {"try_preview": 1})
+def _preview_agent(agent_id: str, preview_token: str) -> dict[str, Any]:
+    doc = get_database()["Agents"].find_one(
+        {"org_id": PREVIEW_ORG_ID, "agent_id": agent_id}, {"try_preview": 1, "config.demo": 1, "_id": 0}
+    )
     meta = (doc or {}).get("try_preview") or {}
     if not doc or not preview_token or not secrets.compare_digest(meta.get("token_hash", ""), _token_hash(preview_token)):
         raise TryError("This test agent has expired. Create it again.", status_code=404)
     if str(meta.get("expires_at") or "") < _now().isoformat():
         raise TryError("This test agent has expired. Create it again.", status_code=404)
+    return doc
+
+
+def register_call(agent_id: str, preview_token: str) -> dict[str, Any]:
+    """A call id for a preview agent this visitor made (checked by its token)."""
+    from app.services import web_call_service
+
+    _preview_agent(agent_id, preview_token)
     try:
         call = web_call_service.register_web_call(PREVIEW_ORG_ID, agent_id)
     except web_call_service.WebCallError as exc:
         raise TryError(exc.message, exc.status_code) from exc
+    calls.open_call(PREVIEW_ORG_ID, agent_id, call["call_id"])
     return {"org_id": PREVIEW_ORG_ID, "agent_id": agent_id, "call_id": call["call_id"]}
+
+
+def _owned_call(agent_id: str, preview_token: str, call_id: str) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    doc = _preview_agent(agent_id, preview_token)
+    call = calls.call_state(call_id)
+    if call and call.get("agent_id") != agent_id:
+        raise TryError("That call isn't this agent's.", status_code=404)
+    return doc["config"]["demo"], call
+
+
+def call_progress(agent_id: str, preview_token: str, call_id: str) -> dict[str, Any]:
+    """Flow and step per tool call (the team's review build shows them as tags)."""
+    _demo, call = _owned_call(agent_id, preview_token, call_id)
+    state = (call or {}).get("state") or {}
+    return {
+        "active_flow": state.get("active_flow"),
+        "step": state.get("step"),
+        "turns": [{"at": t["at"], "tool": t["tool"], "flow_id": t.get("flow_id"), "step": t.get("step")} for t in (call or {}).get("turns", [])],
+    }
+
+
+async def summarise(
+    agent_id: str, preview_token: str, call_id: str, transcript: list[dict[str, Any]], ip: str | None
+) -> dict[str, Any]:
+    """Screen 8: the template's call record. The agent fills it with end_call;
+    if the visitor hung up first, it is read from the transcript instead."""
+    demo, call = _owned_call(agent_id, preview_token, call_id)
+    snap = kb.get(demo.get("kb_version"))
+    out = calls.summary(snap, demo, call)
+    if out["recorded_by_agent"]:
+        return out
+    turns = [
+        (str(t.get("role")), re.sub(r"\s+", " ", str(t.get("text") or "")).strip()[:MAX_CHARS])
+        for t in transcript[:MAX_TRANSCRIPT_TURNS]
+        if t.get("role") in ("agent", "user")
+    ]
+    turns = [(r, t) for r, t in turns if t]
+    if not any(r == "user" for r, _ in turns):
+        return out
+    check_and_count(ip, "turn")
+    t = builder.template(snap, demo["template_id"])
+    fields = [f"{f['key']} ({f['kind']})" for f in t["records_fields"]]
+    try:
+        text = await _complete(
+            _RECORDS_PROMPT.format(
+                template=t["name"],
+                fields=", ".join(fields),
+                transcript="\n".join(
+                    f"Agent: {x}" if r == "agent" else f"Caller: {calls.mask_personal(x, calls.published(snap))}" for r, x in turns
+                ),
+            )
+        )
+        match = re.search(r"\{.*\}", text, re.S)
+        data = json.loads(match.group(0)) if match else {}
+    except (TryError, json.JSONDecodeError):
+        return out
+    for f in out["fields"]:
+        value = data.get(f["key"]) if isinstance(data, dict) else None
+        f["value"] = calls.clean_record_value(snap, value)
+    return out
 
 
 # --- after sign-in ---------------------------------------------------------------------
 
 
-async def save_to_workspace(
-    org_id: str, email: str, scheme_ids: list[str], language: str, greeting: str | None
-) -> dict[str, Any]:
-    """Create the tried agent in the signed-in user's workspace, on the providers it can use."""
-    agent = build_agent(scheme_ids, language)
+async def save_to_workspace(org_id: str, email: str, answers: dict[str, Any], greeting: str | None) -> dict[str, Any]:
+    """Create the tried agent in the signed-in user's workspace, on the providers
+    it can use there. It keeps its knowledge-base version, flows and tools."""
+    snap, config = assemble(answers)
     try:
-        models = try_stack.build_models(language, set(auth_service.available_providers(org_id)))
+        models = try_stack.build_models(config["language"], set(auth_service.available_providers(org_id)))
     except try_stack.StackError as exc:
         raise TryError(str(exc), status_code=409) from exc
-    opening = _clean_greeting(greeting) or agent["welcome"]
-    return await _create(org_id, email, agent["name"][:80], _agent_config(agent, language, opening, models, preview=False))
+    opening = await _opening(config, greeting, snap)
+    t = builder.template(snap, config["template_id"])
+    s = builder.sector(snap, config["sector_id"])
+    name = f"{t['name']} · {s['name']} · {language_name(config['language'])}"
+    try:
+        return await _create(org_id, email, name[:80], _agent_config(snap, config, opening, models, preview=False))
+    except Exception as exc:
+        from app.services import agent_service
+
+        if isinstance(exc, agent_service.AgentConflictError):
+            return await _create(
+                org_id, email, f"{name[:70]} · {secrets.token_hex(2)}", _agent_config(snap, config, opening, models, preview=False)
+            )
+        raise

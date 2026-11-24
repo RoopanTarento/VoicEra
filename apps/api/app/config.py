@@ -264,7 +264,7 @@ class Settings(BaseSettings):
     # Public "try an agent" preview (no sign-up). See app/services/try_agent.py.
     TRY_ENABLED: bool = Field(default=True, description="Serve the public /try preview endpoints")
     TRY_LLM_PROVIDER: str = Field(default="openai", description="openai, groq or openrouter")
-    TRY_LLM_MODEL: str = Field(default="", description="Blank = gpt-4.1-mini on OpenAI")
+    TRY_LLM_MODEL: str = Field(default="", description="Blank = gpt-4.1 on OpenAI (the demo spec's model)")
     TRY_LLM_API_KEY: str = Field(
         default="",
         description=(
@@ -288,12 +288,21 @@ class Settings(BaseSettings):
     TRY_CALL_MAX_SECONDS: int = Field(default=180, description="The browser ends a preview test call after this long")
     TRY_AGENT_TTL_MINUTES: int = Field(default=30, description="Preview agents are deleted after this long")
     TRY_STT_PROVIDERS: str = Field(
-        default="indic_nemotron,sarvam,google,openai",
+        # IndicConformer (the spec's listener) has no English; Indic-Transcribe or
+        # Indic Nemotron on the same model server take English, then cloud keys.
+        default="indic_conformer,indic_transcribe,indic_nemotron,sarvam,google,openai",
         description="Speech recognition for preview calls, in order of preference (first available wins)",
     )
     TRY_TTS_PROVIDERS: str = Field(
         default="maya2_native,indic_orpheus,sarvam,google,openai",
         description="Voice for preview calls, in order of preference (first available wins)",
+    )
+    DEMO_KB_STATES: str = Field(
+        default="National,KA,State,District",
+        description=(
+            "Knowledge-base 'state' values the demo loads (scope gate). The workbook is written for "
+            "Karnataka, so its State and District rows are Karnataka rows."
+        ),
     )
     TRY_TRUSTED_PROXY_HOPS: int = Field(
         default=1,

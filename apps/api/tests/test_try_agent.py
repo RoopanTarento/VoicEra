@@ -1,7 +1,9 @@
-"""Public agent preview (/try): server-built agents, fixed-stack test calls, usage caps."""
+"""Public demo builder (/try): server-built agents, fixed-stack test calls, the
+runtime's demo tools, usage caps and saving after sign-in."""
 
 from __future__ import annotations
 
+import io
 from types import SimpleNamespace
 
 import pytest
@@ -12,13 +14,17 @@ from app import rbac
 from app.auth import create_access_token
 from app.config import get_settings, settings
 from app.services import auth_service, try_agent, try_stack
+from app.services.demo import calls, sources
 
-KN = {"scheme_ids": ["pm-kisan", "pmfby"], "language": "kn"}
+ANSWERS = {"template_id": "T-ANSWER", "sector_id": "S-AGRI", "language": "kn"}
+KN = {"answers": ANSWERS}
+EN = {"answers": {**ANSWERS, "language": "en"}}
 FAKE_MODELS = {
     "stt_config": {"kind": "stt", "provider": "openai", "model": "gpt-4o-transcribe", "language": "kn"},
     "tts_config": {"kind": "tts", "provider": "openai", "model": "gpt-4o-mini-tts", "language": "kn", "voice": "alloy"},
-    "llm_config": {"kind": "llm", "provider": "openai", "model": "gpt-4.1-mini"},
+    "llm_config": {"kind": "llm", "provider": "openai", "model": "gpt-4.1"},
 }
+API_KEY = "internal-test-key-0000000000"
 
 
 class _FakeCompletions:
@@ -28,7 +34,7 @@ class _FakeCompletions:
 
     async def create(self, **kwargs):
         self.calls.append(kwargs)
-        text = self.replies.pop(0) if self.replies else "ನಮಸ್ಕಾರ"
+        text = self.replies.pop(0) if self.replies else "1. ನಮಸ್ಕಾರ\n2. ಇದು ಡೆಮೊ ಕರೆ."
         return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=text))])
 
 
@@ -36,7 +42,8 @@ class _FakeCompletions:
 def fake_llm(monkeypatch: pytest.MonkeyPatch):
     completions = _FakeCompletions()
     client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
-    monkeypatch.setattr(try_agent, "_client", lambda: (client, "openai", "gpt-4.1-mini"))
+    monkeypatch.setattr(try_agent, "_client", lambda: (client, "openai", "gpt-4.1"))
+    monkeypatch.setattr(try_agent, "_NOTICES", {"en": try_agent.builder.NOTICE})
     return completions
 
 
@@ -49,16 +56,19 @@ def stack(monkeypatch: pytest.MonkeyPatch):
         return {k: dict(v, language=language) if k != "llm_config" else dict(v) for k, v in FAKE_MODELS.items()}
 
     monkeypatch.setattr(try_stack, "build_models", build)
-    monkeypatch.setattr(try_stack, "describe", lambda models: {"stt": "OpenAI", "llm": "OpenAI · gpt-4.1-mini", "tts": "OpenAI"})
+    monkeypatch.setattr(try_stack, "describe", lambda models: {"stt": "AI4Bharat IndicConformer", "llm": "OpenAI · gpt-4.1", "tts": "Maya 2"})
     return seen
 
 
 @pytest.fixture
 def client(vault_env, secure_db, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(settings, "PROVIDER_AUTH_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    monkeypatch.setattr(settings, "INTERNAL_API_KEY", API_KEY)
     get_settings.cache_clear()
     rbac.invalidate_cache()
     monkeypatch.setattr(try_agent, "_indexes_ready", False)
+    monkeypatch.setattr(calls, "_indexes_ready", False)
+    monkeypatch.setattr(sources, "_indexes_ready", False)
     import app.main as main_module
 
     yield TestClient(main_module.app)
@@ -69,25 +79,58 @@ def _ip(n: int) -> dict[str, str]:
     return {"X-Forwarded-For": f"203.0.113.{n}"}
 
 
-def test_catalogue_is_public_and_built_in_only(client, secure_db):
-    secure_db["CustomSchemes"].insert_one({"org_id": "", "id": "mine", "name": "Mine", "category": "Farmers"})
+def _prepare(client, body=KN, ip=1):
+    r = client.post("/api/v1/try/prepare", json=body, headers=_ip(ip))
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def _tool(client, prep, call_id, name, **args):
+    r = client.post(
+        "/api/v1/try/runtime/tool",
+        json={"org_id": prep["org_id"], "agent_id": prep["agent_id"], "call_id": call_id, "name": name, "args": args},
+        headers={"X-API-Key": API_KEY},
+    )
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_catalogue_lists_templates_sectors_and_twelve_languages(client):
     body = client.get("/api/v1/try/catalogue").json()
-    ids = [s["id"] for s in body["schemes"]]
-    assert len(ids) == 16 and "mine" not in ids
-    assert "eligibility" not in body["schemes"][0]
-    assert [l["code"] for l in body["languages"]][:6] == ["kn", "hi", "en", "mr", "ta", "te"]
-    assert body["languages"][0]["native"] == "ಕನ್ನಡ"
+    assert [t["template_id"] for t in body["templates"]] == ["T-ANSWER", "T-COLLECT", "T-GUIDE", "T-INFORM", "T-REMIND", "T-RESOLVE"] or len(body["templates"]) == 6
+    assert len(body["sectors"]) == 12 and body["kb_version"]
+    codes = [lang["code"] for lang in body["languages"]]
+    assert codes[:6] == ["kn", "hi", "en", "mr", "ta", "te"] and len(codes) == 12 and codes[-1] == "as"
+    assert body["languages"][-1]["beta"] and body["languages"][0]["native"] == "ಕನ್ನಡ"
+    assert "prompt" not in str(body).lower()
 
 
-def test_agent_returns_greeting_in_language_and_never_the_prompt(client, fake_llm, stack):
-    body = client.post("/api/v1/try/agent", json=KN).json()
-    assert body["greeting"] == "ನಮಸ್ಕಾರ" and body["english"] == try_agent.PREVIEW_WELCOME
-    assert "prompt" not in body and body["stack"]["llm"].startswith("OpenAI")
+def test_sources_show_the_sector_knowledge_and_flows(client):
+    body = client.get("/api/v1/try/sources", params={"template_id": "T-ANSWER", "sector_id": "S-AGRI"}).json()
+    assert body["cards"]["count"] == 21 and len(body["cards"]["preview"]) == 4
+    assert body["cards"]["verified"] + body["cards"]["partly_verified"] == 21
+    assert [f["flow_id"] for f in body["flows"]][0] == "F-ANSWER" and len(body["flows"]) == 4
+    assert body["role"]["you_are"].startswith("Lakshmi")
+    complaints = client.get("/api/v1/try/sources", params={"template_id": "T-RESOLVE", "sector_id": "S-POWER"}).json()["complaints"]
+    assert {c["flow_id"] for c in complaints} == {"F-POWE-OUTAGE", "F-POWE-WATER"} and all(c["goes_to"] for c in complaints)
+    assert client.get("/api/v1/try/sources", params={"template_id": "T-X", "sector_id": "S-AGRI"}).status_code == 400
+
+
+def test_agent_returns_the_greeting_in_language_and_never_the_prompt(client, fake_llm, stack):
+    fake_llm.replies = ["1. ನಮಸ್ಕಾರ, ನಾನು ಕೃಷಿ ಸಹಾಯವಾಣಿ ಸಹಾಯಕ. ನಿಮಗೆ ಹೇಗೆ ಸಹಾಯ ಮಾಡಲಿ?\n2. ಇದು ಮಾದರಿ ಮಾಹಿತಿಯೊಂದಿಗೆ AI ಡೆಮೊ ಕರೆ."]
+    r = client.post("/api/v1/try/agent", json=KN, headers=_ip(1))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["greeting"].startswith("ನಮಸ್ಕಾರ") and body["greeting_english"].startswith("Hello, I'm the agriculture helpline")
+    assert body["notice"] == "ಇದು ಮಾದರಿ ಮಾಹಿತಿಯೊಂದಿಗೆ AI ಡೆಮೊ ಕರೆ." and body["notice"] in body["opening"]
+    assert body["cards"] == 21 and body["flows"] == 4 and body["stack"]["llm"] == "OpenAI · gpt-4.1"
+    assert "system_prompt" not in str(body) and "# Role" not in str(body)
 
 
 def test_english_agent_needs_no_model_call(client, fake_llm, stack):
-    body = client.post("/api/v1/try/agent", json={"scheme_ids": ["pm-kisan"], "language": "en"}).json()
-    assert body["greeting"] == try_agent.PREVIEW_WELCOME and body["english"] is None and not fake_llm.calls
+    body = client.post("/api/v1/try/agent", json=EN, headers=_ip(2)).json()
+    assert body["greeting_english"] is None and body["opening"].startswith("Hello, I'm the agriculture helpline assistant. This is an AI demo call")
+    assert not fake_llm.calls
 
 
 def test_agent_reports_when_no_voice_stack_is_available(client, fake_llm, monkeypatch):
@@ -95,71 +138,133 @@ def test_agent_reports_when_no_voice_stack_is_available(client, fake_llm, monkey
         raise try_stack.StackError("No voice provider is available for this language yet.")
 
     monkeypatch.setattr(try_stack, "build_models", none)
-    body = client.post("/api/v1/try/agent", json=KN).json()
-    assert body["stack"] is None and "Kannada" in body["stack_error"]
+    body = client.post("/api/v1/try/agent", json=EN).json()
+    assert body["stack"] is None and "aren't available yet" in body["stack_error"]
 
 
 @pytest.mark.parametrize(
-    "payload",
+    "answers",
     [
-        {"scheme_ids": ["not-a-scheme"], "language": "hi"},
-        {"scheme_ids": ["pm-kisan"], "language": "xx"},
-        {"scheme_ids": [], "language": "hi"},
+        {**ANSWERS, "template_id": "T-NOPE"},
+        {**ANSWERS, "sector_id": "S-NOPE"},
+        {**ANSWERS, "language": "xx"},
+        {**ANSWERS, "template_id": "T-INFORM", "sector_id": "S-AGRI"},  # no sample announcement for agriculture
     ],
 )
-def test_agent_rejects_unknown_schemes_and_languages(client, fake_llm, stack, payload):
-    assert client.post("/api/v1/try/agent", json=payload).status_code in (400, 422)
+def test_agent_rejects_unknown_ids_and_missing_inputs(client, fake_llm, stack, answers):
+    assert client.post("/api/v1/try/agent", json={"answers": answers}).status_code in (400, 422)
 
 
-def test_prepare_creates_a_hidden_short_lived_agent_on_the_fixed_stack(client, secure_db, stack):
-    r = client.post("/api/v1/try/prepare", json={**KN, "greeting": "ನಮಸ್ಕಾರ"}, headers=_ip(1))
-    assert r.status_code == 200, r.text
-    body = r.json()
-    assert body["org_id"] == try_agent.PREVIEW_ORG_ID and body["preview_token"]
-    agent = secure_db["Agents"].find_one({"agent_id": body["agent_id"]})
-    assert agent["org_id"] == try_agent.PREVIEW_ORG_ID and agent["agent_category"] == "websocket"
-    assert agent["config"]["prompts"]["greeting_message"] == "ನಮಸ್ಕಾರ"
-    assert "PM-KISAN" in agent["config"]["prompts"]["system_prompt"]
-    assert agent["config"]["language"]["primary"] == "kn"
-    assert agent["try_preview"]["token_hash"] != body["preview_token"]  # only a hash is stored
+def test_prepare_creates_a_hidden_short_lived_demo_agent(client, secure_db, fake_llm, stack):
+    prep = _prepare(client, EN)
+    assert prep["org_id"] == try_agent.PREVIEW_ORG_ID and prep["preview_token"]
+    agent = secure_db["Agents"].find_one({"agent_id": prep["agent_id"]})
+    config = agent["config"]
+    assert config["demo"]["preview"] and config["demo"]["template_id"] == "T-ANSWER" and len(config["demo"]["card_ids"]) == 21
+    assert config["prompts"]["greeting_message"] == prep["opening"] and try_agent.builder.NOTICE in prep["opening"]
+    prompt = config["prompts"]["system_prompt"]
+    assert "K-AGRI-02 · Verified · Why didn't my PM-KISAN instalment come?" in prompt and "<state>" in prompt
+    assert config["behaviour"]["automatic_call_ending"]["enabled"] is False
+    assert agent["try_preview"]["token_hash"] != prep["preview_token"]  # only a hash is stored
     org = secure_db["Organizations"].find_one({"org_id": try_agent.PREVIEW_ORG_ID})
     assert org["status"] == "active" and not secure_db["Memberships"].find_one({"org_id": try_agent.PREVIEW_ORG_ID})
 
 
-def test_visitors_with_the_same_picks_get_separate_agents(client, secure_db, stack):
-    ids = [client.post("/api/v1/try/prepare", json=KN, headers=_ip(9)).json()["agent_id"] for _ in range(2)]
-    names = {secure_db["Agents"].find_one({"agent_id": i})["name"] for i in ids}
-    assert len(names) == 2  # agent names are unique per workspace
+def test_an_edited_greeting_still_carries_the_ai_and_demo_notice(client, secure_db, fake_llm, stack):
+    prep = _prepare(client, {**EN, "greeting": "Hi, farmers' helpline here. What do you need?"})
+    assert prep["opening"] == "Hi, farmers' helpline here. This is an AI demo call with sample information. What do you need?"
 
 
-def test_call_needs_the_preview_token(client, stack):
-    prep = client.post("/api/v1/try/prepare", json=KN, headers=_ip(2)).json()
+def test_visitors_with_the_same_picks_get_separate_agents(client, secure_db, fake_llm, stack):
+    ids = [_prepare(client, EN, ip=9)["agent_id"] for _ in range(2)]
+    assert len({secure_db["Agents"].find_one({"agent_id": i})["name"] for i in ids}) == 2
+
+
+def test_call_needs_the_preview_token_and_opens_call_state(client, secure_db, fake_llm, stack):
+    prep = _prepare(client, EN, ip=2)
     assert client.post("/api/v1/try/call", json={"agent_id": prep["agent_id"], "preview_token": "wrong"}).status_code == 404
     ok = client.post("/api/v1/try/call", json={"agent_id": prep["agent_id"], "preview_token": prep["preview_token"]})
-    assert ok.status_code == 200 and ok.json()["call_id"]
+    assert ok.status_code == 200
+    state = secure_db["DemoCalls"].find_one({"call_id": ok.json()["call_id"]})
+    assert state["preview"] and state["state"]["active_flow"] == "F-ANSWER"
 
 
-def test_expired_preview_agents_are_refused_and_swept(client, secure_db, stack):
-    prep = client.post("/api/v1/try/prepare", json=KN, headers=_ip(3)).json()
+def test_expired_preview_agents_are_refused_and_swept_with_their_calls(client, secure_db, fake_llm, stack):
+    prep = _prepare(client, EN, ip=3)
+    call_id = client.post("/api/v1/try/call", json={"agent_id": prep["agent_id"], "preview_token": prep["preview_token"]}).json()["call_id"]
     secure_db["Agents"].update_one({"agent_id": prep["agent_id"]}, {"$set": {"try_preview.expires_at": "2000-01-01T00:00:00+00:00"}})
     assert client.post("/api/v1/try/call", json={"agent_id": prep["agent_id"], "preview_token": prep["preview_token"]}).status_code == 404
-    client.post("/api/v1/try/prepare", json=KN, headers=_ip(3))
+    _prepare(client, EN, ip=3)
     assert not secure_db["Agents"].find_one({"agent_id": prep["agent_id"]})
+    assert not secure_db["DemoCalls"].find_one({"call_id": call_id}) and not secure_db["CallLogs"].find_one({"call_id": call_id})
 
 
-def test_calls_are_capped_per_ip(client, stack, monkeypatch):
+def test_runtime_tools_drive_the_flow_on_the_server(client, secure_db, fake_llm, stack):
+    prep = _prepare(client, EN, ip=4)
+    call_id = client.post("/api/v1/try/call", json={"agent_id": prep["agent_id"], "preview_token": prep["preview_token"]}).json()["call_id"]
+    bad = client.post("/api/v1/try/runtime/tool", json={"org_id": prep["org_id"], "agent_id": prep["agent_id"], "call_id": call_id, "name": "get_card"})
+    assert bad.status_code == 401
+
+    found = _tool(client, prep, call_id, "search_cards", query="PM-KISAN instalment stopped")
+    assert found["cards"][0]["card_id"] == "K-AGRI-02" and "Active flow: F-ANSWER" in found["state_block"]
+    started = _tool(client, prep, call_id, "start_flow", flow_id="F-AGRI-PMKISAN-STOP")
+    assert started["step"]["question"] == "Have you completed eKYC?"
+    nxt = _tool(client, prep, call_id, "record_slot", asks_for="ekyc_done", value="yes", branch_matched=False)
+    assert nxt["next"]["asks_for"] == "aadhaar_bank"
+    done = _tool(client, prep, call_id, "record_slot", asks_for="aadhaar_bank", value="no", branch_matched=True)
+    assert "link it at the bank" in done["say"] and done["back_in"] == "F-ANSWER"
+    assert _tool(client, prep, call_id, "start_flow", flow_id="F-HEAL-TB")["error"].startswith("F-HEAL-TB isn't one of this agent's flows")
+    assert _tool(client, prep, call_id, "get_card", card_id="K-HEAL-01")["error"]
+    _tool(client, prep, call_id, "log_gap", caller_text="Tomato price in Belagavi? My number is 9845012345")
+    gap = secure_db["DemoGaps"].find_one({"sector_id": "S-AGRI"})
+    assert gap and "9845012345" not in gap["text"]
+    ended = _tool(client, prep, call_id, "end_call", records={"topic_asked": ["PM-KISAN stopped", "tomato price"], "answered": "partly", "referred_to": ["bank"], "extra": "x"})
+    assert ended["ok"]
+
+    ref = {"agent_id": prep["agent_id"], "preview_token": prep["preview_token"], "call_id": call_id}
+    summary = client.post("/api/v1/try/summary", json={**ref, "transcript": []}).json()
+    fields = {f["key"]: f["value"] for f in summary["fields"]}
+    assert fields == {"topic_asked": ["PM-KISAN stopped", "tomato price"], "answered": "partly", "referred_to": ["bank"]}
+    assert summary["recorded_by_agent"] and summary["flows"][0]["flow_id"] == "F-AGRI-PMKISAN-STOP"
+    assert {c["card_id"] for c in summary["cards"]} == {"K-AGRI-02"} and summary["gaps"]
+    assert not fake_llm.calls
+    progress = client.post("/api/v1/try/progress", json=ref).json()
+    assert progress["turns"] and progress["turns"][1]["flow_id"] == "F-AGRI-PMKISAN-STOP"
+
+
+def test_summary_is_read_from_the_transcript_when_the_caller_hung_up(client, fake_llm, stack):
+    prep = _prepare(client, EN, ip=5)
+    call_id = client.post("/api/v1/try/call", json={"agent_id": prep["agent_id"], "preview_token": prep["preview_token"]}).json()["call_id"]
+    ref = {"agent_id": prep["agent_id"], "preview_token": prep["preview_token"], "call_id": call_id}
+    silent = client.post("/api/v1/try/summary", json={**ref, "transcript": [{"role": "agent", "text": "Hello?"}]}).json()
+    assert all(f["value"] is None for f in silent["fields"]) and not fake_llm.calls
+    fake_llm.replies = ['{"topic_asked": ["crop loss"], "answered": "yes", "referred_to": "Call 9845012345", "made_up": 1}']
+    transcript = [{"role": "agent", "text": "How can I help?"}, {"role": "user", "text": "My crop was damaged."}]
+    body = client.post("/api/v1/try/summary", json={**ref, "transcript": transcript}).json()
+    fields = {f["key"]: f["value"] for f in body["fields"]}
+    assert fields["topic_asked"] == ["crop loss"] and fields["answered"] == "yes" and "9845012345" not in fields["referred_to"]
+    assert not body["recorded_by_agent"] and set(fields) == {"topic_asked", "answered", "referred_to"}
+
+
+def test_summary_needs_the_preview_token(client, fake_llm, stack):
+    prep = _prepare(client, EN, ip=6)
+    r = client.post("/api/v1/try/summary", json={"agent_id": prep["agent_id"], "preview_token": "nope", "call_id": "c1"})
+    assert r.status_code == 404
+
+
+def test_calls_are_capped_per_ip(client, fake_llm, stack, monkeypatch):
     monkeypatch.setattr(settings, "TRY_CALLS_PER_IP_HOUR", 2)
-    codes = [client.post("/api/v1/try/prepare", json=KN, headers=_ip(4)).status_code for _ in range(3)]
+    codes = [client.post("/api/v1/try/prepare", json=EN, headers=_ip(14)).status_code for _ in range(3)]
     assert codes == [200, 200, 429]
-    assert client.post("/api/v1/try/prepare", json=KN, headers=_ip(5)).status_code == 200
-    spoofed = client.post("/api/v1/try/prepare", json=KN, headers={"X-Forwarded-For": "1.2.3.4, 203.0.113.4"})
+    assert client.post("/api/v1/try/prepare", json=EN, headers=_ip(15)).status_code == 200
+    spoofed = client.post("/api/v1/try/prepare", json=EN, headers={"X-Forwarded-For": "1.2.3.4, 203.0.113.14"})
     assert spoofed.status_code == 429
 
 
 def test_turns_are_capped_per_day(client, fake_llm, stack, monkeypatch):
     monkeypatch.setattr(settings, "TRY_TURNS_PER_DAY", 1)
-    assert client.post("/api/v1/try/agent", json=KN, headers=_ip(6)).status_code == 200
-    assert client.post("/api/v1/try/agent", json=KN, headers=_ip(7)).status_code == 429
+    assert client.post("/api/v1/try/agent", json=KN, headers=_ip(16)).status_code == 200
+    assert client.post("/api/v1/try/agent", json=KN, headers=_ip(17)).status_code == 429
 
 
 def test_translate_returns_one_english_line_per_text(client, fake_llm):
@@ -168,33 +273,51 @@ def test_translate_returns_one_english_line_per_text(client, fake_llm):
     assert body["english"] == ["Hello", "Yes, two acres", None]
 
 
-def test_summary_keeps_only_known_schemes_and_outcomes(client, fake_llm):
-    fake_llm.replies = ['{"fit": ["pm-kisan", "made-up"], "explained": ["pmfby", "pm-kisan"], "outcome": "Shared how to apply"}']
-    transcript = [{"role": "agent", "text": "Do you farm?"}, {"role": "user", "text": "Yes, two acres."}]
-    body = client.post("/api/v1/try/summary", json={"scheme_ids": KN["scheme_ids"], "transcript": transcript}).json()
-    assert body == {"fit": ["pm-kisan"], "explained": ["pmfby"], "outcome": "Shared how to apply"}
-    fake_llm.replies = ['{"fit": [], "explained": [], "outcome": "Anything else"}']
-    assert client.post("/api/v1/try/summary", json={"scheme_ids": ["pm-kisan"], "transcript": transcript}).json()["outcome"] == "Call ended early"
+def test_route_uses_the_router_prompt_and_only_known_ids(client, fake_llm):
+    fake_llm.replies = ['{"template_id": "T-REMIND", "sector_id": "S-HEALTH", "topic": "vaccines", "language": "kn", "confidence": 0.9, "ask_next": "q2", "reason": "ok"}']
+    body = client.post("/api/v1/try/route", json={"text": "Remind mothers about vaccines in Kannada"}).json()
+    assert body["template_id"] == "T-REMIND" and body["sector_id"] == "S-HEALTH" and body["ask_next"] == "q2" and body["source"] == "model"
+    assert "Remind mothers about vaccines in Kannada" in fake_llm.calls[0]["messages"][0]["content"]
 
 
-def test_summary_of_a_call_with_no_caller_speech_needs_no_model(client, fake_llm):
-    body = client.post(
-        "/api/v1/try/summary", json={"scheme_ids": ["pm-kisan"], "transcript": [{"role": "agent", "text": "Hello?"}]}
-    ).json()
-    assert body["outcome"] == "Call ended early" and not fake_llm.calls
+def test_uploaded_document_becomes_session_cards(client, secure_db, fake_llm, stack):
+    text = ("Crop insurance claims for paddy must be filed within seventy two hours of the damage. " * 4 + "\n\n") * 3
+    r = client.post("/api/v1/try/sources/upload", files={"file": ("circular.txt", io.BytesIO(text.encode()), "text/plain")})
+    assert r.status_code == 200, r.text
+    source = r.json()
+    assert source["card_count"] >= 1 and secure_db["DemoSessionSources"].find_one({"source_id": source["source_id"]})
+    body = client.post("/api/v1/try/agent", json={"answers": {**EN["answers"], "source_ids": [source["source_id"]]}}).json()
+    assert body["cards"] == 21 + source["card_count"] and body["session_cards"] == source["card_count"]
+    only = client.post("/api/v1/try/agent", json={"answers": {**EN["answers"], "sample_knowledge": False, "source_ids": [source["source_id"]]}}).json()
+    assert only["cards"] == source["card_count"]
+    bad = client.post("/api/v1/try/sources/upload", files={"file": ("x.exe", io.BytesIO(b"MZ"), "application/octet-stream")})
+    assert bad.status_code == 400
 
 
-def test_save_needs_sign_in_and_uses_the_workspace_providers(client, secure_db, stack):
-    assert client.post("/api/v1/try/save", json=KN).status_code in (401, 403)
+@pytest.mark.parametrize(
+    "url",
+    ["http://127.0.0.1/admin", "http://169.254.169.254/latest/meta-data", "file:///etc/passwd", "https://user:pw@example.com/", "http://example.com:8080/"],
+)
+def test_links_to_private_or_odd_addresses_are_refused(client, url):
+    r = client.post("/api/v1/try/sources/link", json={"url": url})
+    assert r.status_code == 400
+
+
+def test_save_needs_sign_in_and_uses_the_workspace_providers(client, secure_db, fake_llm, stack):
+    assert client.post("/api/v1/try/save", json=EN).status_code in (401, 403)
     secure_db["Organizations"].insert_one({"org_id": "ws01", "name": "WS", "status": "active"})
     secure_db["Memberships"].insert_one({"email": "o@ws.example", "org_id": "ws01", "role": "super_admin"})
     auth_service.upsert_provider_auth("ws01", "openai", {"api_key": "sk-test-0000000000000000000000000000000000"})
     token = create_access_token({"sub": "o@ws.example", "org_id": "ws01", "role": "super_admin"})
-    r = client.post("/api/v1/try/save", json={**KN, "greeting": "ನಮಸ್ಕಾರ"}, headers={"Authorization": f"Bearer {token}"})
+    r = client.post("/api/v1/try/save", json={**EN, "greeting": "Hello farmers. How can I help?"}, headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 200, r.text
     saved = secure_db["Agents"].find_one({"agent_id": r.json()["agent_id"]})
     assert saved["org_id"] == "ws01" and "try_preview" not in saved
+    assert saved["config"]["demo"]["preview"] is False and saved["config"]["demo"]["kb_version"]
+    assert saved["config"]["prompts"]["greeting_message"] == "Hello farmers. This is an AI demo call with sample information. How can I help?"
     assert "openai" in stack[-1]
+    again = client.post("/api/v1/try/save", json=EN, headers={"Authorization": f"Bearer {token}"})
+    assert again.status_code == 200 and again.json()["agent_id"] != r.json()["agent_id"]
 
 
 def test_disabled_preview_is_not_found(client, monkeypatch):
@@ -273,5 +396,6 @@ def test_text_model_falls_back_to_a_lent_provider(client, secure_db, monkeypatch
 
 def test_missing_text_model_says_so(client, monkeypatch):
     monkeypatch.setattr(try_agent, "resolve_text_model", lambda: None)
+    monkeypatch.setattr(try_agent, "_NOTICES", {"en": try_agent.builder.NOTICE})
     r = client.post("/api/v1/try/agent", json=KN)
     assert r.status_code == 503 and "AI model" in r.json()["detail"]

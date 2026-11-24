@@ -71,6 +71,7 @@ async def run_pipeline(
         behaviour=behaviour,
         extra_tools=extra_tools,
         aggregator_hooks=aggregator_hooks,
+        call_id=call_id,
     )
 
     if call_id:
