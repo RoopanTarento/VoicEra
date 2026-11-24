@@ -59,6 +59,13 @@ export interface DemoService {
   status: string;
 }
 
+export interface DemoCardRow {
+  card_id: string;
+  title: string;
+  type: string;
+  status: string;
+}
+
 /** What the first two questions show for a template and sector. */
 export interface DemoSources {
   template_id: string;
@@ -68,7 +75,9 @@ export interface DemoSources {
     count: number;
     verified: number;
     partly_verified: number;
-    preview: { card_id: string; title: string; type: string; status: string }[];
+    preview: DemoCardRow[];
+    /** Every card for the sector, in sheet order. */
+    items?: DemoCardRow[];
   };
   flows: { flow_id: string; name: string }[];
   record: { record_id: string; person: string; details: string; date_or_ref: string } | null;
@@ -90,6 +99,8 @@ export interface DemoAnswers {
   language: string;
   topic?: string;
   sample_knowledge?: boolean;
+  /** Sample cards the visitor unticked. */
+  excluded_cards?: string[];
   source_ids?: string[];
   announcement?: string;
   audience?: string;

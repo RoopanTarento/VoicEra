@@ -25,6 +25,7 @@ class Answers(BaseModel):
     language: str = Field(min_length=1, max_length=8)
     topic: Optional[str] = Field(default=None, max_length=400)
     sample_knowledge: bool = True
+    excluded_cards: list[str] = Field(default_factory=list, max_length=200)
     source_ids: list[str] = Field(default_factory=list, max_length=3)
     announcement: Optional[str] = Field(default=None, max_length=1400)
     audience: Optional[str] = Field(default=None, max_length=400)

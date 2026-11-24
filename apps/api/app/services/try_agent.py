@@ -324,7 +324,8 @@ async def build(answers: dict[str, Any], ip: str | None) -> dict[str, Any]:
         "notice": notice,
         "opening": builder.compose_opening(greeting, notice),
         "opening_english": english["opening"] if language != "en" else None,
-        "cards": len(config["card_ids"]) + len(config["session_cards"]),
+        # What the visitor kept, plus their own; cards the flows need ride along uncounted.
+        "cards": config.get("chosen_cards", len(config["card_ids"])) + len(config["session_cards"]),
         "session_cards": len(config["session_cards"]),
         "flows": len(config["flows"]),
         "role": config["role"],

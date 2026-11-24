@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, Check, FileText, Link2, Plus, Trash2, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, ChevronDown, FileText, Link2, Plus, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Input, Textarea } from "@/components/ui/Field";
 import { Spinner } from "@/components/ui/Spinner";
@@ -11,6 +11,7 @@ import {
   uploadSource,
   type AddedSource,
   type DemoAnswers,
+  type DemoCardRow,
   type DemoSector,
   type DemoSources,
   type DemoTemplate,
@@ -28,6 +29,8 @@ export interface Setup {
   topic: string;
   language: string | null;
   sampleKnowledge: boolean;
+  /** Sample cards the visitor unticked. */
+  excludedCards: string[];
   added: AddedSource[];
   announcement: string;
   audience: string;
@@ -47,6 +50,7 @@ export function newSetup(templateId: string): Setup {
     topic: "",
     language: null,
     sampleKnowledge: true,
+    excludedCards: [],
     added: [],
     announcement: "",
     audience: "",
@@ -56,6 +60,18 @@ export function newSetup(templateId: string): Setup {
     complaintFlows: null,
     serviceCardId: null,
   };
+}
+
+/** Sample cards the agent will load (none when sample knowledge is off). */
+export function keptCards(s: Setup, sources: DemoSources): number {
+  if (!s.sampleKnowledge) return 0;
+  const ids = (sources.cards.items ?? sources.cards.preview).map((c) => c.card_id);
+  return Math.max(0, sources.cards.count - ids.filter((id) => s.excludedCards.includes(id)).length);
+}
+
+/** The visitor kept something for the agent to answer from. */
+function hasKnowledge(s: Setup, sources: DemoSources): boolean {
+  return keptCards(s, sources) > 0 || s.added.length > 0;
 }
 
 /** The answers the server builds the agent from (ids only, plus the visitor's own text). */
@@ -68,6 +84,7 @@ export function toAnswers(s: Setup): DemoAnswers | null {
     language: s.language,
     ...(s.topic.trim() ? { topic: s.topic.trim() } : {}),
     sample_knowledge: s.sampleKnowledge,
+    ...(s.sampleKnowledge && s.excludedCards.length ? { excluded_cards: s.excludedCards } : {}),
     source_ids: s.added.map((a) => a.source_id),
     ...(job === "T-INFORM" ? { announcement: s.announcement.trim(), audience: s.audience.trim() } : {}),
     ...(job === "T-REMIND" ? { reminder: s.reminder.trim(), if_cant_make_it: s.ifCantMakeIt } : {}),
@@ -214,6 +231,74 @@ function StatusTag({ status }: { status: string }) {
   return <span className={`text-[12.5px] ${status === "Verified" ? "text-v-ok-ink" : "text-v-warn-ink"}`}>{status}</span>;
 }
 
+const PREVIEW_CARDS = 4;
+
+/** The sector's sample cards, each with a tick box; the first few show, the rest open with the "+ N more" row. */
+function CardList({
+  sector,
+  cards,
+  total,
+  flows,
+  excluded,
+  first,
+  onExcluded,
+}: {
+  sector: DemoSector;
+  cards: DemoCardRow[];
+  total: number;
+  flows: number;
+  excluded: string[];
+  first: number;
+  onExcluded: (ids: string[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const canOpen = cards.length > first;
+  const shown = open ? cards : cards.slice(0, first);
+  const hidden = Math.max(0, total - shown.length);
+  const kept = total - cards.filter((c) => excluded.includes(c.card_id)).length;
+  const flowText = `${flows} question ${flows === 1 ? "flow" : "flows"}`;
+  const toggle = (id: string) => onExcluded(excluded.includes(id) ? excluded.filter((x) => x !== id) : [...excluded, id]);
+
+  let summary: string;
+  if (open) summary = `Show fewer · ${kept} of ${total} cards kept`;
+  else if (first === 0) summary = `${kept} of ${total} cards and ${flowText} for ${sector.name}`;
+  else summary = `+ ${hidden} more ${hidden === 1 ? "card" : "cards"} and ${flowText} for ${sector.name}`;
+
+  return (
+    <div className="overflow-hidden rounded-v-xl border border-v-line bg-white">
+      {shown.map((c) => {
+        const on = !excluded.includes(c.card_id);
+        return (
+          <label key={c.card_id} className="flex cursor-pointer items-start gap-3 border-b border-v-line px-5 py-3.5 hover:bg-v-soft">
+            <input type="checkbox" checked={on} onChange={() => toggle(c.card_id)} className="mt-1 size-4 shrink-0 accent-[var(--v-fg)]" />
+            <span className={`flex min-w-0 flex-col gap-0.5 ${on ? "" : "opacity-50"}`}>
+              <span className="text-[15px] font-semibold leading-snug">{c.title}</span>
+              <span className="text-[12.5px] text-v-muted-2">
+                {c.type} · <StatusTag status={c.status} />
+              </span>
+            </span>
+          </label>
+        );
+      })}
+      {canOpen ? (
+        <button
+          type="button"
+          aria-expanded={open}
+          onClick={() => setOpen((v) => !v)}
+          className="flex w-full items-center justify-between gap-3 px-5 py-3.5 text-left text-[14px] text-v-muted-2 hover:bg-v-soft hover:text-v-fg"
+        >
+          {summary}
+          <ChevronDown className={`size-4 shrink-0 transition-transform ${open ? "rotate-180" : ""}`} strokeWidth={2} />
+        </button>
+      ) : (
+        <p className="m-0 px-5 py-3.5 text-[14px] text-v-muted-2">
+          {total} {total === 1 ? "card" : "cards"} and {flowText} for {sector.name}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function KnowledgePanel({
   sector,
   sources,
@@ -233,7 +318,9 @@ function KnowledgePanel({
   const [busy, setBusy] = useState<"" | "upload" | "link">("");
   const [error, setError] = useState("");
   const full = sources.cards.count;
-  const more = Math.max(0, full - sources.cards.preview.length);
+  const rows = sources.cards.items ?? sources.cards.preview;
+  const kept = keptCards(setup, sources);
+  const allVerified = sources.cards.partly_verified === 0;
 
   async function add(kind: "upload" | "link", run: () => Promise<AddedSource>) {
     setBusy(kind);
@@ -263,7 +350,10 @@ function KnowledgePanel({
           <span className="flex items-center gap-1.5 text-[16px] font-semibold">
             Sample knowledge {setup.sampleKnowledge ? <Check className="size-4" strokeWidth={2.6} /> : null}
           </span>
-          <span className="text-[13.5px] text-v-muted-2">{full} checked cards · default</span>
+          <span className="text-[13.5px] text-v-muted-2">
+            {setup.sampleKnowledge ? kept : full} {allVerified ? "verified " : ""}
+            {(setup.sampleKnowledge ? kept : full) === 1 ? "card" : "cards"} · default
+          </span>
         </button>
         <button type="button" onClick={() => fileRef.current?.click()} disabled={busy !== "" || setup.added.length >= 3} className={choiceClass(false)}>
           <span className="flex items-center gap-1.5 text-[16px] font-semibold">
@@ -333,20 +423,19 @@ function KnowledgePanel({
         </ul>
       ) : null}
 
-      {setup.sampleKnowledge && !compact ? (
-        <div className="overflow-hidden rounded-v-xl border border-v-line bg-white">
-          {sources.cards.preview.map((c) => (
-            <div key={c.card_id} className="flex items-baseline justify-between gap-4 border-b border-v-line px-5 py-3.5">
-              <span className="text-[15px] font-medium">{c.title}</span>
-              <span className="shrink-0 text-[12.5px] text-v-muted-2">
-                {c.type} · <StatusTag status={c.status} />
-              </span>
-            </div>
-          ))}
-          <p className="m-0 px-5 py-3.5 text-[14px] text-v-muted-2">
-            + {more} more {more === 1 ? "card" : "cards"} and {sources.flows.length} question {sources.flows.length === 1 ? "flow" : "flows"} for {sector.name}
-          </p>
-        </div>
+      {setup.sampleKnowledge ? (
+        <CardList
+          sector={sector}
+          cards={rows}
+          total={full}
+          flows={sources.flows.length}
+          excluded={setup.excludedCards}
+          first={compact ? 0 : PREVIEW_CARDS}
+          onExcluded={(excludedCards) => onSetup({ excludedCards })}
+        />
+      ) : null}
+      {setup.sampleKnowledge && kept === 0 && !setup.added.length ? (
+        <p className="m-0 text-[13.5px] text-v-warn-ink">Tick at least one card, or add a document or link.</p>
       ) : null}
       <p className="m-0 text-[13px] text-v-muted">Only Verified and Partly verified cards are loaded.</p>
     </div>
@@ -484,7 +573,7 @@ export function KnowledgeQuestion({
   if (sources) {
     if (job === "ANSWER") {
       body = <KnowledgePanel sector={sector} sources={sources} setup={setup} onSetup={onSetup} />;
-      ready = setup.sampleKnowledge || setup.added.length > 0;
+      ready = hasKnowledge(setup, sources);
     } else if (job === "GUIDE") {
       body = (
         <div className="flex flex-col gap-8">
@@ -492,7 +581,7 @@ export function KnowledgeQuestion({
           <KnowledgePanel sector={sector} sources={sources} setup={setup} onSetup={onSetup} compact />
         </div>
       );
-      ready = (!(sources.services ?? []).length || Boolean(setup.serviceCardId)) && (setup.sampleKnowledge || setup.added.length > 0);
+      ready = (!(sources.services ?? []).length || Boolean(setup.serviceCardId)) && hasKnowledge(setup, sources);
     } else if (job === "RESOLVE") {
       body = (
         <div className="flex flex-col gap-8">
@@ -501,7 +590,7 @@ export function KnowledgeQuestion({
         </div>
       );
       const offered = (sources.complaints ?? []).length;
-      ready = (!offered || (setup.complaintFlows ?? ["all"]).length > 0) && (setup.sampleKnowledge || setup.added.length > 0);
+      ready = (!offered || (setup.complaintFlows ?? ["all"]).length > 0) && hasKnowledge(setup, sources);
     } else if (job === "INFORM") {
       body = (
         <div className="flex flex-col gap-5">

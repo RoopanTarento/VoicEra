@@ -9,7 +9,7 @@ import { Creating, type CreatedAgent } from "@/components/try/Creating";
 import { Landing } from "@/components/try/Landing";
 import { LiveCall, type EndedCall } from "@/components/try/LiveCall";
 import { Ready } from "@/components/try/Ready";
-import { KnowledgeQuestion, LanguageQuestion, SectorQuestion, newSetup, toAnswers, type Setup } from "@/components/try/SetupQuestions";
+import { KnowledgeQuestion, LanguageQuestion, SectorQuestion, keptCards, newSetup, toAnswers, type Setup } from "@/components/try/SetupQuestions";
 import { TryHeader, type TryStep } from "@/components/try/TryHeader";
 import { VoicePreloader } from "@/components/try/VoiceWave";
 import {
@@ -73,7 +73,12 @@ export function TryFlow() {
   const languageName = catalogue?.languages.find((l) => l.code === setup?.language)?.name ?? "";
   const answers = useMemo(() => (setup ? toAnswers(setup) : null), [setup]);
 
-  const patch = useCallback((p: Partial<Setup>) => setSetup((s) => (s ? { ...s, ...p } : s)), []);
+  // A new sector means a new card list, so earlier unticks no longer apply.
+  const patch = useCallback(
+    (p: Partial<Setup>) =>
+      setSetup((s) => (s ? { ...s, ...p, ...(p.sectorId && p.sectorId !== s.sectorId ? { excludedCards: [] } : {}) } : s)),
+    [],
+  );
 
   // Q1/Q2 content for the chosen template and sector; prefill what the sheet has.
   const sourceKey = setup?.sectorId ? `${setup.templateId}|${setup.sectorId}` : "";
@@ -92,6 +97,7 @@ export function TryFlow() {
             announcement: s.announcement || src.announcement || "",
             audience: s.audience || src.audience || "",
             reminder: s.reminder || src.reminder || "",
+            excludedCards: src.cards.items ? s.excludedCards.filter((id) => src.cards.items?.some((c) => c.card_id === id)) : s.excludedCards,
             serviceCardId: s.serviceCardId && src.services?.some((x) => x.card_id === s.serviceCardId) ? s.serviceCardId : (src.service_match ?? src.services?.[0]?.card_id ?? null),
             surveyQuestions: null,
             complaintFlows: null,
@@ -312,7 +318,7 @@ export function TryFlow() {
       <Creating
         answers={answers}
         languageName={languageName}
-        expectedCards={sources ? (setup.sampleKnowledge ? sources.cards.count : 0) + setup.added.reduce((n, a) => n + a.card_count, 0) : null}
+        expectedCards={sources ? keptCards(setup, sources) + setup.added.reduce((n, a) => n + a.card_count, 0) : null}
         onDone={onCreated}
         onBack={() => setStage("q3")}
       />

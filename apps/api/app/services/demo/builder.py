@@ -119,6 +119,20 @@ def cards_for(snap: dict[str, Any], sector_id: str) -> list[str]:
     return [cid for cid, c in snap["cards"].items() if c["sector_id"] == sector_id]
 
 
+def flow_cards(snap: dict[str, Any], flow_ids: list[str]) -> list[str]:
+    """Cards these flows' branches point to (some sit in another sector, e.g. a
+    disaster card in an agriculture flow); the agent always keeps them so a
+    branch can be followed with get_card."""
+    out: list[str] = []
+    for fid in flow_ids:
+        for step in (snap["flows"].get(fid) or {}).get("steps") or []:
+            for key in ("then", "default_next"):
+                for cid in (step.get(key) or {}).get("cards") or []:
+                    if cid in snap["cards"] and cid not in out:
+                        out.append(cid)
+    return out
+
+
 def contacts_for(snap: dict[str, Any], sector_id: str) -> list[str]:
     """This sector's and everyone's contacts first; the rest stay for out-of-sector referrals."""
     near = [cid for cid, c in snap["contacts"].items() if c["sector_id"] in (sector_id, "ALL")]
@@ -276,6 +290,7 @@ def sources(snap: dict[str, Any], template_id: str, sector_id: str, topic: str =
             "verified": sum(1 for c in cards if c["status"] == "Verified"),
             "partly_verified": sum(1 for c in cards if c["status"] == "Partly verified"),
             "preview": [{"card_id": c["card_id"], "title": c["title"], "type": c["type"], "status": c["status"]} for c in cards[:4]],
+            "items": [{"card_id": c["card_id"], "title": c["title"], "type": c["type"], "status": c["status"]} for c in cards],
         },
         "flows": [{"flow_id": f, "name": snap["flows"][f]["name"]} for f in flow_ids],
         "record": {k: record[k] for k in ("record_id", "person", "details", "date_or_ref")} if record else None,
@@ -344,6 +359,14 @@ def assemble(snap: dict[str, Any], answers: dict[str, Any], session_cards: list[
     session_cards = list(session_cards or [])
     if not sample and not session_cards:
         raise BuildError("Keep the sample knowledge, or add a document or link.")
+    sector_cards = cards_for(snap, sector_id)
+    raw_excluded = answers.get("excluded_cards")
+    excluded = {str(c) for c in raw_excluded} if isinstance(raw_excluded, list) else set()
+    if excluded - set(sector_cards):
+        raise BuildError("Untick cards from the list.")
+    kept_cards = [c for c in sector_cards if c not in excluded] if sample else []
+    if sample and not kept_cards and not session_cards:
+        raise BuildError("Keep at least one card, or add a document or link.")
 
     flow_ids = flows_for(snap, template_id, sector_id)
     record = demo_record(snap, template_id, sector_id)
@@ -354,7 +377,9 @@ def assemble(snap: dict[str, Any], answers: dict[str, Any], session_cards: list[
         "language": language,
         "topic": topic,
         "sample_knowledge": sample,
-        "card_ids": cards_for(snap, sector_id) if sample else [],
+        "card_ids": kept_cards,
+        # Shown as "N cards" on Ready: what the visitor kept, before cards the flows need are added.
+        "chosen_cards": len(kept_cards),
         "session_cards": session_cards,
         "contact_ids": contacts_for(snap, sector_id),
         "guardrail_ids": [g["rule_id"] for g in guardrails_for(snap, template_id)],
@@ -402,8 +427,11 @@ def assemble(snap: dict[str, Any], answers: dict[str, Any], session_cards: list[
         if chosen_service and chosen_service not in services:
             raise BuildError("Pick a service from the list.")
         config["options"]["service_card_id"] = chosen_service or None
+        if chosen_service and chosen_service not in config["card_ids"]:
+            config["card_ids"].append(chosen_service)
 
     config["flows"] = flow_ids
+    config["card_ids"] += [c for c in flow_cards(snap, flow_ids) if c not in config["card_ids"]]
     config["records_fields"] = t["records_fields"]
     config["role"] = role_card(snap, template_id, sector_id, record)
     config["role_card_id"] = config["role"]["role_id"]

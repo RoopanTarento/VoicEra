@@ -207,8 +207,46 @@ def test_helpline_agent_loads_the_sector_and_its_inbound_flows(snap):
     config = builder.assemble(snap, {"template_id": "T-ANSWER", "sector_id": "S-AGRI", "language": "kn"})
     assert config["flows"][0] == "F-ANSWER"
     assert set(config["flows"]) == {"F-ANSWER", "F-AGRI-PMKISAN-ELIG", "F-AGRI-PMKISAN-STOP", "F-AGRI-CROPLOSS"}
-    assert len(config["card_ids"]) == 21 and config["role"]["you_are"].startswith("Lakshmi")
+    agri = [c for c in config["card_ids"] if snap["cards"][c]["sector_id"] == "S-AGRI"]
+    assert len(agri) == 21 and config["role"]["you_are"].startswith("Lakshmi")
     assert config["demo_record_id"] is None
+    # The crop-loss flow points to a disaster-relief card, so the agent keeps it.
+    assert "K-DISA-10" in config["card_ids"]
+
+
+def test_unticked_cards_are_left_out(snap):
+    base = {"template_id": "T-ANSWER", "sector_id": "S-AGRI", "language": "kn"}
+    linked = builder.flow_cards(snap, builder.flows_for(snap, "T-ANSWER", "S-AGRI"))
+    free = [c for c in builder.cards_for(snap, "S-AGRI") if c not in linked]
+    config = builder.assemble(snap, {**base, "excluded_cards": free[:2]})
+    assert free[0] not in config["card_ids"] and free[1] not in config["card_ids"]
+    assert free[2] in config["card_ids"] and config["chosen_cards"] == 19
+    with pytest.raises(builder.BuildError):
+        builder.assemble(snap, {**base, "excluded_cards": ["K-HEAL-01"]})
+    every = builder.cards_for(snap, "S-AGRI")
+    with pytest.raises(builder.BuildError):
+        builder.assemble(snap, {**base, "excluded_cards": every})
+
+
+def test_flow_and_service_cards_stay_even_when_unticked(snap):
+    linked = builder.flow_cards(snap, builder.flows_for(snap, "T-ANSWER", "S-AGRI"))
+    agri_linked = [c for c in linked if snap["cards"][c]["sector_id"] == "S-AGRI"]
+    if agri_linked:
+        config = builder.assemble(snap, {"template_id": "T-ANSWER", "sector_id": "S-AGRI", "language": "kn", "excluded_cards": agri_linked[:1]})
+        assert agri_linked[0] in config["card_ids"]
+    services = builder.sources(snap, "T-GUIDE", "S-MUNI")["services"]
+    if services:
+        sid = services[0]["card_id"]
+        config = builder.assemble(
+            snap, {"template_id": "T-GUIDE", "sector_id": "S-MUNI", "language": "en", "service_card_id": sid, "excluded_cards": [sid]}
+        )
+        assert sid in config["card_ids"]
+
+
+def test_sources_list_every_card_for_the_tick_boxes(snap):
+    view = builder.sources(snap, "T-ANSWER", "S-AGRI")
+    assert len(view["cards"]["items"]) == view["cards"]["count"] == 21
+    assert view["cards"]["preview"] == view["cards"]["items"][:4]
 
 
 def test_reminder_opening_does_not_say_what_it_is_about(snap):

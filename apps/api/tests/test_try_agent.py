@@ -160,7 +160,8 @@ def test_prepare_creates_a_hidden_short_lived_demo_agent(client, secure_db, fake
     assert prep["org_id"] == try_agent.PREVIEW_ORG_ID and prep["preview_token"]
     agent = secure_db["Agents"].find_one({"agent_id": prep["agent_id"]})
     config = agent["config"]
-    assert config["demo"]["preview"] and config["demo"]["template_id"] == "T-ANSWER" and len(config["demo"]["card_ids"]) == 21
+    assert config["demo"]["preview"] and config["demo"]["template_id"] == "T-ANSWER" and config["demo"]["chosen_cards"] == 21
+    assert "K-DISA-10" in config["demo"]["card_ids"]
     assert config["prompts"]["greeting_message"] == prep["opening"] and try_agent.builder.NOTICE in prep["opening"]
     prompt = config["prompts"]["system_prompt"]
     assert "K-AGRI-02 · Verified · Why didn't my PM-KISAN instalment come?" in prompt and "<state>" in prompt
