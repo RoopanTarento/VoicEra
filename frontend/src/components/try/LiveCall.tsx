@@ -276,7 +276,7 @@ function Stage({ orgId, agentId, callId, previewToken, language, maxSeconds, rol
         ? "Agent is speaking…"
         : userSpeaking
           ? "You're speaking…"
-          : "Listening…";
+          : "Agent is listening…";
 
   return (
     <section className="mx-auto grid w-full max-w-6xl flex-1 grid-cols-1 gap-6 px-4 pb-10 pt-8 sm:px-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:gap-10">
